@@ -94,8 +94,15 @@ uv pip install -e ".[dev,ragas]"     # editable install with extras
 
 ```bash
 cp .env.example .env                 # then edit as needed
-# ANTHROPIC_API_KEY=...  is only required for RAGAS generation eval
 ```
+
+> **⚠️ Add your API key *before* running any RAGAS generation eval.** Open `.env`
+> and set `ANTHROPIC_API_KEY=sk-ant-...` (used as the answer generator + judge for
+> RAGAS). It is the *only* secret RAGBench needs, and only for generation eval —
+> indexing, all four retrievers, and retrieval metrics (NDCG/MRR/Recall) run
+> without it. Also review the per-dataset knobs in `configs/{scifact,fiqa}.yaml`
+> (e.g. `indexing.device: cpu|cuda`, `evaluation.pipelines`,
+> `evaluation.ragas_sample_size`) before a run.
 
 ### 4. Verify the install
 
@@ -146,6 +153,148 @@ List or remove the kernel later with:
 jupyter kernelspec list
 jupyter kernelspec uninstall ragbench
 ```
+
+---
+
+## Pipeline Execution Commands
+
+> **Before you run anything that uses RAGAS**, set `ANTHROPIC_API_KEY` in `.env`
+> and install the extra: `uv sync --extra ragas`. Retrieval-only runs (indexing,
+> the four retrievers, NDCG/MRR/Recall) need **no** key — pass `--no-ragas` to
+> skip generation eval entirely. Dataset-specific behaviour (device, default
+> pipelines, sample size, reranker model) is controlled in
+> `configs/scifact.yaml` / `configs/fiqa.yaml`.
+
+### Toggle the dataset (SciFact ↔ FiQA)
+
+Every command is driven by a config file — switch datasets by pointing `--config`
+at a different YAML:
+
+```bash
+configs/scifact.yaml   # dev / fast iteration  (5,183 passages, 300 queries)
+configs/fiqa.yaml      # primary benchmark      (57,638 passages, 648 queries)
+```
+
+Make targets wrap both: `make index-scifact` · `make index-fiqa` · `make index-all`
+· `make eval-scifact` · `make eval-fiqa`. Setting `HF_SPACE=true` restricts the
+server to SciFact only.
+
+### 1. Build indexes
+
+```bash
+# both backends (bm25s + Qdrant dense/sparse) for a dataset
+uv run python -m ragbench.indexing.build --config configs/scifact.yaml
+uv run python -m ragbench.indexing.build --config configs/fiqa.yaml
+
+# build only ONE backend
+uv run python -m ragbench.indexing.build --config configs/fiqa.yaml --only bm25
+uv run python -m ragbench.indexing.build --config configs/fiqa.yaml --only qdrant
+
+# console-script equivalent (installed via pyproject [project.scripts])
+uv run ragbench-index --config configs/scifact.yaml
+```
+
+### 2. Toggle which retrievers / pipelines run
+
+Valid pipeline names: **`bm25` · `dense` · `hybrid` · `reranked`**. There are three
+ways to choose which ones execute:
+
+**(a) Per request, via the API** — one pipeline, or several side-by-side:
+
+```bash
+# single pipeline
+curl -s localhost:8080/api/fiqa/retrieve \
+  -H 'content-type: application/json' \
+  -d '{"query":"How does dollar cost averaging work?","pipeline":"dense","top_k":10}'
+
+# side-by-side subset (parallel) — omit "pipelines" to run all four
+curl -s localhost:8080/api/fiqa/retrieve/batch \
+  -H 'content-type: application/json' \
+  -d '{"query":"ETF vs index fund?","pipelines":["bm25","reranked"],"top_k":5}'
+```
+
+**(b) Offline eval — select with `--pipelines`:**
+
+```bash
+# a subset
+uv run python -m ragbench.evaluation.runner --config configs/fiqa.yaml --pipelines bm25 hybrid
+# all pipelines listed in the config's evaluation.pipelines
+uv run python -m ragbench.evaluation.runner --config configs/scifact.yaml
+# retrieval-only (no API key), skip MLflow logging
+uv run python -m ragbench.evaluation.runner --config configs/fiqa.yaml --no-ragas --no-mlflow
+# console-script equivalent
+uv run ragbench-eval --config configs/fiqa.yaml --pipelines dense reranked
+```
+
+| Flag | Effect |
+|---|---|
+| `--pipelines a b …` | Run only these pipelines (default: `evaluation.pipelines` from config) |
+| `--no-ragas` | Skip RAGAS generation eval (no `ANTHROPIC_API_KEY` needed) |
+| `--no-mlflow` | Skip MLflow logging (still writes `data/{ds}/eval_latest.json`) |
+
+**(c) Config default / UI** — `evaluation.pipelines:` in the dataset YAML sets the
+default set when `--pipelines` is omitted; the frontend's **PipelineSelector**
+checkboxes toggle them live.
+
+### 3. Trigger / read eval from the running API
+
+```bash
+# kick off an eval run (background by default) -> MLflow + Prometheus gauges
+curl -s localhost:8080/api/fiqa/eval/run \
+  -H 'content-type: application/json' \
+  -d '{"pipelines":["bm25","hybrid"],"with_ragas":false,"background":true}'
+
+# fetch the latest eval summary (what the MetricsPanel reads)
+curl -s localhost:8080/api/fiqa/eval/latest
+```
+
+### 4. Serve the API
+
+```bash
+make serve
+# or directly:
+uv run uvicorn ragbench.serving.app:app --host 0.0.0.0 --port 8080 --reload
+```
+
+### 5. Docker — run the pipeline in containers
+
+```bash
+# full stack: app + qdrant + mlflow + prometheus + grafana
+docker compose up --build
+# just the backing services (index/serve from the host against them)
+docker compose up -d qdrant mlflow
+
+# run indexing INSIDE the stack (one-off container on the compose network)
+docker compose run --rm ragbench \
+  uv run python -m ragbench.indexing.build --config configs/fiqa.yaml
+
+# or exec against the already-running app container
+docker compose exec ragbench \
+  uv run python -m ragbench.indexing.build --config configs/scifact.yaml
+docker compose exec ragbench \
+  uv run python -m ragbench.evaluation.runner --config configs/fiqa.yaml --no-ragas
+
+docker compose down            # stop the stack
+docker compose down -v         # stop + wipe volumes (qdrant / mlflow / grafana data)
+```
+
+> Running index/eval **from the host** against the compose Qdrant? Set
+> `QDRANT_URL=http://localhost:6333`. **Inside** compose it's already
+> `http://qdrant:6333`. Pass secrets to containers via the `.env` file (Compose
+> reads it automatically) — never bake `ANTHROPIC_API_KEY` into the image.
+
+### 6. Per-dataset knobs (`configs/{ds}.yaml`)
+
+| Key | Purpose |
+|---|---|
+| `indexing.device` | `cpu` or `cuda` for embedding/reranking |
+| `indexing.embedding_model` | dense model (default `BAAI/bge-large-en-v1.5`) |
+| `serving.top_k_default` | default result count |
+| `serving.rerank_multiplier` | over-retrieval factor for the reranked pipeline (`top_k × N`) |
+| `evaluation.pipelines` | default pipelines for eval / API |
+| `evaluation.ragas_sample_size` | #queries scored by RAGAS (cost control) |
+| `evaluation.ragas_llm` | RAGAS judge model (default `claude-3-haiku`) |
+| `reranker.model` | cross-encoder used by the reranked pipeline |
 
 ---
 
