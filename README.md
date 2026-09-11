@@ -49,6 +49,225 @@ Ports: **app** 8080 · **Qdrant** 6333 · **MLflow** 5001 · **Prometheus** 9090
 
 ---
 
+## Setup & Getting Started
+
+RAGBench uses [**uv**](https://docs.astral.sh/uv/) to manage the Python
+environment and dependencies. `uv` creates and manages a project-local virtual
+environment in `.venv/` for you — you rarely need to activate it because
+`uv run <cmd>` executes inside that environment automatically.
+
+### 1. Prerequisites
+
+| Tool | Version | Needed for |
+|---|---|---|
+| Python | 3.11+ | the `ragbench` package |
+| uv | latest | dependency + venv management |
+| Node.js | 20+ | building the React frontend |
+| Docker + Compose | latest | full stack (Qdrant, MLflow, Prometheus, Grafana) |
+
+```bash
+# Install uv (macOS / Linux)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+# (Windows PowerShell)  irm https://astral.sh/uv/install.ps1 | iex
+```
+
+### 2. Create the environment & install dependencies
+
+`uv sync` reads `pyproject.toml` + `uv.lock`, creates `.venv/`, and installs
+everything in one step:
+
+```bash
+uv sync                              # core (serve, index, retrieval eval)
+uv sync --extra dev                  # + pytest / ruff (tests & linting)
+uv sync --extra ragas --extra dev    # + RAGAS generation eval (LLM judge)
+```
+
+Prefer to manage the venv explicitly? That works too:
+
+```bash
+uv venv --python 3.11 .venv          # create the virtualenv
+source .venv/bin/activate            # Windows: .venv\Scripts\activate
+uv pip install -e ".[dev,ragas]"     # editable install with extras
+```
+
+### 3. Configure environment variables
+
+```bash
+cp .env.example .env                 # then edit as needed
+# ANTHROPIC_API_KEY=...  is only required for RAGAS generation eval
+```
+
+### 4. Verify the install
+
+```bash
+uv run python -c "import ragbench; print('ragbench', ragbench.__version__)"
+uv run pytest                        # 22 passed, 3 skipped (heavy pipelines)
+```
+
+### 5. Use the venv inside Jupyter notebooks
+
+Add `ipykernel` + JupyterLab to the project env, then register the venv as a
+named Jupyter kernel so notebooks can import `ragbench` directly:
+
+```bash
+# Add the notebook tooling to the project (writes to pyproject + uv.lock)
+uv add --dev ipykernel jupyterlab
+
+# Register THIS project's .venv as a selectable Jupyter kernel
+uv run python -m ipykernel install --user \
+  --name ragbench \
+  --display-name "Python (ragbench)"
+
+# Launch JupyterLab and pick the "Python (ragbench)" kernel from the launcher
+uv run jupyter lab
+```
+
+Inside a notebook cell you can now do:
+
+```python
+from ragbench.config.schema import load_config
+from ragbench.retrieval.factory import build_pipeline
+from ragbench.common.protocol import RetrieveRequest
+
+cfg = load_config("configs/scifact.yaml")
+pipe = build_pipeline("bm25", cfg)          # requires an index (make index-scifact)
+pipe.retrieve(RetrieveRequest(query="aspirin cancer", pipeline="bm25", top_k=5))
+```
+
+To confirm the kernel is wired to the right interpreter:
+
+```python
+import sys; print(sys.executable)   # -> .../ragbench/.venv/bin/python
+```
+
+List or remove the kernel later with:
+
+```bash
+jupyter kernelspec list
+jupyter kernelspec uninstall ragbench
+```
+
+---
+
+## Workflow & Pipeline Diagrams
+
+> The diagrams below render natively on GitHub (Mermaid). They map the four
+> pipelines, the indexing flow, a live request, and how evaluation feeds the
+> Grafana dashboard.
+
+### System architecture (Docker Compose)
+
+```mermaid
+flowchart LR
+  UI["React + Vite UI<br/>/fiqa · /scifact · /metrics"]
+  R["FastAPI routers<br/>/api/{ds}/retrieve · /status · /eval"]
+  REG["Pipeline registry<br/>lazy build + cache"]
+  MET["GET /metrics<br/>(Prometheus instrumentator)"]
+  BM["bm25s index<br/>(on disk)"]
+  QD[("Qdrant<br/>dense + sparse")]
+  EMB["bge-large-en-v1.5<br/>+ cross-encoder"]
+  MLF[("MLflow :5001")]
+  PROM[("Prometheus :9090")]
+  GRAF["Grafana :3001"]
+
+  UI -->|REST JSON| R --> REG
+  REG --> BM
+  REG --> QD
+  REG --> EMB
+  R --> MET
+  R -. eval run .-> MLF
+  PROM -->|scrape| MET
+  GRAF -->|PromQL| PROM
+```
+
+### Indexing flow (`make index-*`)
+
+```mermaid
+flowchart TD
+  A["BEIR dataset<br/>corpus / queries / qrels"] --> B["data/loader.py<br/>download + parse"]
+  B --> C["data/chunker.py<br/>normalize title + text"]
+  C --> D["bm25_indexer<br/>(bm25s)"]
+  C --> E["qdrant_indexer"]
+  E --> E1["dense: bge-large-en-v1.5<br/>(1024-d, cosine)"]
+  E --> E2["sparse: fastembed BM25"]
+  D --> F["data/{ds}/bm25_index/"]
+  E1 --> G[("Qdrant collection<br/>{prefix}_dense<br/>named vectors: dense + sparse")]
+  E2 --> G
+```
+
+### The four retrieval pipelines
+
+```mermaid
+flowchart LR
+  Q(["query"]) --> P1 & P2 & P3 & P4
+  subgraph bm25
+    P1["tokenize → bm25s.retrieve"]
+  end
+  subgraph dense
+    P2["encode query → Qdrant ANN (dense)"]
+  end
+  subgraph hybrid
+    P3["dense + sparse → Qdrant RRF fusion"]
+  end
+  subgraph reranked
+    P4["hybrid (top_k×5) → cross-encoder → top_k"]
+  end
+  P1 --> R["RetrieveResponse<br/>ranked results + latency_ms"]
+  P2 --> R
+  P3 --> R
+  P4 --> R
+```
+
+### A live side-by-side request
+
+```mermaid
+sequenceDiagram
+  participant UI as React UI
+  participant API as FastAPI router
+  participant REG as Registry
+  participant PIPE as Pipelines
+  participant PROM as Prometheus
+
+  UI->>API: POST /api/fiqa/retrieve/batch {query, pipelines, top_k}
+  API->>REG: get_pipeline(dataset, name)  (lazy build + cache)
+  par run selected pipelines in parallel
+    API->>PIPE: retrieve(query, top_k)
+    PIPE-->>API: results + latency_ms
+  end
+  API->>PROM: observe_retrieval(latency, reranker_latency)
+  API-->>UI: BatchRetrieveResponse (side-by-side + latency badges)
+```
+
+### Evaluation → observability
+
+```mermaid
+flowchart LR
+  RUN["evaluation/runner.py<br/>(make eval-*)"] --> RET["retrieval_eval<br/>NDCG · MRR · Recall · MAP"]
+  RUN --> RAG["generation_eval<br/>RAGAS (opt-in)"]
+  RET --> MLF[("MLflow runs<br/>ragbench/{ds}/{pipeline}")]
+  RAG --> MLF
+  RUN --> J["data/{ds}/eval_latest.json"]
+  J --> GA["Prometheus gauges<br/>ndcg@10 · mrr@10 · faithfulness"]
+  GA --> DASH["Grafana:<br/>quality vs latency scatter"]
+```
+
+### End-to-end build order
+
+```mermaid
+flowchart LR
+  D1["1 Data<br/>BEIR loader"] --> D2["2 Index<br/>bm25s + Qdrant"]
+  D2 --> D3["3 Pipelines<br/>bm25/dense/hybrid/reranked"]
+  D3 --> D4["4 Eval<br/>BEIR metrics + MLflow"]
+  D4 --> D5["5 Serving<br/>FastAPI routers"]
+  D5 --> D6["6 FiQA<br/>primary benchmark"]
+  D6 --> D7["7 RAGAS<br/>generation eval"]
+  D7 --> D8["8 Observability<br/>Prometheus + Grafana"]
+  D8 --> D9["9 Frontend<br/>React side-by-side"]
+  D9 --> D10["10 Ops<br/>Compose · k6 · HF Spaces"]
+```
+
+---
+
 ## Datasets
 
 | | SciFact | FiQA |
