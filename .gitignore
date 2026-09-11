@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+.uv/
+build/
+dist/
+
+# Env
+.env
+.env.local
+
+# Data & indexes (downloaded / built artifacts)
+data/*
+!data/.gitkeep
+
+# ML tracking / vector store
+mlruns/
+mlartifacts/
+qdrant_storage/
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.log
+
+# Test / cache
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/

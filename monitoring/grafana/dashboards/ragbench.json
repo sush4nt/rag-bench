@@ -1,0 +1,201 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 1,
+  "title": "RAGBench — Retrieval Strategy Comparison",
+  "uid": "ragbench-main",
+  "tags": ["ragbench", "retrieval"],
+  "timezone": "",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": { "from": "now-30m", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "dataset",
+        "label": "Dataset",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": { "query": "label_values(ragbench_retrieve_requests_total, dataset)", "refId": "A" },
+        "refresh": 2,
+        "includeAll": true,
+        "multi": false,
+        "current": { "text": "fiqa", "value": "fiqa" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "bargauge",
+      "title": "Query latency p95 by pipeline",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "decimals": 3, "color": { "mode": "palette-classic" } }, "overrides": [] },
+      "options": { "orientation": "horizontal", "displayMode": "gradient", "showUnfilled": true },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.95, sum by (pipeline, le) (rate(ragbench_retrieve_latency_seconds_bucket{dataset=~\"$dataset\"}[5m])))",
+          "legendFormat": "{{pipeline}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Request rate by pipeline",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (pipeline) (rate(ragbench_retrieve_requests_total{dataset=~\"$dataset\"}[1m]))",
+          "legendFormat": "{{pipeline}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Reranker overhead p95 (reranked only)",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "decimals": 3, "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(ragbench_reranker_latency_seconds_bucket{dataset=~\"$dataset\"}[5m])))",
+          "legendFormat": "reranker p95"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "NDCG@10 by pipeline (last eval)",
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 3, "min": 0, "max": 1, "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "yellow", "value": 0.4 }, { "color": "green", "value": 0.6 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "textMode": "value_and_name" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "ragbench_eval_ndcg_at_10{dataset=~\"$dataset\"}",
+          "legendFormat": "{{pipeline}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "MRR@10 by pipeline (last eval)",
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 3, "min": 0, "max": 1, "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "yellow", "value": 0.4 }, { "color": "green", "value": 0.6 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "textMode": "value_and_name" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "ragbench_eval_mrr_at_10{dataset=~\"$dataset\"}",
+          "legendFormat": "{{pipeline}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "RAGAS Faithfulness (last run)",
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 3, "min": 0, "max": 1, "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "yellow", "value": 0.6 }, { "color": "green", "value": 0.8 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "textMode": "value_and_name" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "ragbench_ragas_faithfulness{dataset=~\"$dataset\"}",
+          "legendFormat": "{{pipeline}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "xychart",
+      "title": "Quality vs Latency — the thesis chart (NDCG@10 vs p95)",
+      "gridPos": { "h": 10, "w": 16, "x": 0, "y": 15 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Bottom-left = fast/lower quality (bm25). Top-right = slow/highest quality (reranked).",
+      "fieldConfig": {
+        "defaults": { "custom": { "pointSize": { "fixed": 12 } } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "p95_latency_s" }, "properties": [ { "id": "unit", "value": "s" }, { "id": "displayName", "value": "p95 latency (s)" } ] },
+          { "matcher": { "id": "byName", "options": "ndcg_at_10" }, "properties": [ { "id": "unit", "value": "none" }, { "id": "displayName", "value": "NDCG@10" } ] }
+        ]
+      },
+      "options": {
+        "seriesMapping": "manual",
+        "series": [
+          {
+            "x": { "matcher": { "id": "byName", "options": "p95_latency_s" } },
+            "y": { "matcher": { "id": "byName", "options": "ndcg_at_10" } }
+          }
+        ],
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "list", "placement": "right" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "instant": true,
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.95, sum by (pipeline, le) (rate(ragbench_retrieve_latency_seconds_bucket{dataset=~\"$dataset\"}[5m])))",
+          "legendFormat": "{{pipeline}}"
+        },
+        {
+          "refId": "B",
+          "format": "table",
+          "instant": true,
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "ragbench_eval_ndcg_at_10{dataset=~\"$dataset\"}",
+          "legendFormat": "{{pipeline}}"
+        }
+      ],
+      "transformations": [
+        { "id": "joinByField", "options": { "byField": "pipeline", "mode": "outer" } },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": { "Value #A": "p95_latency_s", "Value #B": "ndcg_at_10" },
+            "excludeByName": { "Time 1": true, "Time 2": true, "dataset 1": true, "dataset 2": true }
+          }
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "bargauge",
+      "title": "Indexed passages by dataset",
+      "gridPos": { "h": 10, "w": 8, "x": 16, "y": 15 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "continuous-BlPu" } }, "overrides": [] },
+      "options": { "orientation": "horizontal", "displayMode": "basic" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "ragbench_index_size_passages",
+          "legendFormat": "{{dataset}}"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+# SciFact — development / fast iteration dataset (5,183 passages, 300 test queries)
+dataset:
+  name: scifact
+  beir_name: scifact
+  split: test
+  local_path: data/scifact
+
+qdrant:
+  collection_prefix: ragbench_scifact
+  # A single physical collection `ragbench_scifact_dense` holds BOTH the named
+  # "dense" and "sparse" vectors — Qdrant server-side RRF fusion requires both
+  # vectors to live in one collection. See docs in qdrant_indexer.py.
+
+indexing:
+  embedding_model: BAAI/bge-large-en-v1.5
+  vector_size: 1024
+  batch_size: 128
+  device: cpu          # or cuda
+  sparse_model: Qdrant/bm25
+
+evaluation:
+  k_values: [1, 5, 10, 100]
+  ragas_llm: claude-3-haiku-20240307
+  ragas_sample_size: 50              # SciFact is small; fewer judge calls
+  pipelines: [bm25, dense, hybrid, reranked]
+
+serving:
+  router_prefix: /api/scifact
+  top_k_default: 10
+  rerank_multiplier: 5               # over-retrieve top_k * 5 before reranking
+
+reranker:
+  model: cross-encoder/ms-marco-MiniLM-L-6-v2

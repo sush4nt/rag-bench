@@ -1,0 +1,33 @@
+# FiQA — primary benchmark dataset (57,638 passages, 648 test queries, financial QA)
+dataset:
+  name: fiqa
+  beir_name: fiqa
+  split: test
+  local_path: data/fiqa
+  # Free-text answers for RAGAS live in the original FiQA QA dataset on HuggingFace.
+  qa_hf_dataset: BeIR/fiqa-generated-queries   # optional; see loader.load_qa_answers
+
+qdrant:
+  collection_prefix: ragbench_fiqa
+  # creates: ragbench_fiqa_dense (holds named "dense" + "sparse" vectors)
+
+indexing:
+  embedding_model: BAAI/bge-large-en-v1.5
+  vector_size: 1024
+  batch_size: 128
+  device: cpu          # or cuda
+  sparse_model: Qdrant/bm25
+
+evaluation:
+  k_values: [1, 5, 10, 100]
+  ragas_llm: claude-3-haiku-20240307  # cheapest LLM for judge calls
+  ragas_sample_size: 100              # run RAGAS on 100 queries, not all 648
+  pipelines: [bm25, dense, hybrid, reranked]
+
+serving:
+  router_prefix: /api/fiqa
+  top_k_default: 10
+  rerank_multiplier: 5
+
+reranker:
+  model: cross-encoder/ms-marco-MiniLM-L-6-v2
