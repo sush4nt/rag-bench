@@ -256,32 +256,94 @@ make serve
 uv run uvicorn ragbench.serving.app:app --host 0.0.0.0 --port 8080 --reload
 ```
 
-### 5. Docker — run the pipeline in containers
+### 5. Docker — run the whole stack in containers
+
+Docker Compose starts **five services together** — the RAGBench app, Qdrant,
+MLflow, Prometheus, and Grafana. With this path you don't need Python or Node
+installed locally; everything runs in containers. Follow the steps in order.
+
+**Step 1 — Start the stack**
 
 ```bash
-# full stack: app + qdrant + mlflow + prometheus + grafana
-docker compose up --build
-# just the backing services (index/serve from the host against them)
-docker compose up -d qdrant mlflow
-
-# run indexing INSIDE the stack (one-off container on the compose network)
-docker compose run --rm ragbench \
-  uv run python -m ragbench.indexing.build --config configs/fiqa.yaml
-
-# or exec against the already-running app container
-docker compose exec ragbench \
-  uv run python -m ragbench.indexing.build --config configs/scifact.yaml
-docker compose exec ragbench \
-  uv run python -m ragbench.evaluation.runner --config configs/fiqa.yaml --no-ragas
-
-docker compose down            # stop the stack
-docker compose down -v         # stop + wipe volumes (qdrant / mlflow / grafana data)
+docker compose up --build          # builds the app image, starts all 5 services
 ```
 
-> Running index/eval **from the host** against the compose Qdrant? Set
-> `QDRANT_URL=http://localhost:6333`. **Inside** compose it's already
-> `http://qdrant:6333`. Pass secrets to containers via the `.env` file (Compose
-> reads it automatically) — never bake `ANTHROPIC_API_KEY` into the image.
+Leave that terminal running. To run it in the background instead, add `-d`:
+
+```bash
+docker compose up --build -d       # detached (background) mode
+```
+
+Once it's up, open any of these in your browser:
+
+| Service | URL | Notes |
+|---|---|---|
+| App + UI | http://localhost:8080 | the React frontend |
+| API docs | http://localhost:8080/docs | interactive Swagger UI |
+| MLflow | http://localhost:5001 | experiment tracking |
+| Prometheus | http://localhost:9090 | raw metrics |
+| Grafana | http://localhost:3001 | dashboards (login `admin` / `admin`) |
+
+**Step 2 — Build an index (required before querying)**
+
+A fresh stack has empty indexes, so build one. `docker compose exec` runs a
+command *inside the already-running* `ragbench` container, which can reach Qdrant
+automatically:
+
+```bash
+docker compose exec ragbench \
+  uv run python -m ragbench.indexing.build --config configs/scifact.yaml
+```
+
+Use `configs/fiqa.yaml` instead for the full benchmark (takes 8–12 minutes).
+
+**Step 3 — Query it**
+
+```bash
+curl -s localhost:8080/api/scifact/retrieve \
+  -H 'content-type: application/json' \
+  -d '{"query":"aspirin colorectal cancer","pipeline":"hybrid","top_k":5}'
+```
+
+**Step 4 — (optional) Run an evaluation**
+
+```bash
+docker compose exec ragbench \
+  uv run python -m ragbench.evaluation.runner --config configs/scifact.yaml --no-ragas
+```
+
+Results show up in MLflow and the Grafana dashboard. Remove `--no-ragas` (and set
+`ANTHROPIC_API_KEY` in `.env` first) to include RAGAS generation eval.
+
+**Step 5 — Stop the stack**
+
+```bash
+docker compose down                # stop containers, KEEP indexes/data
+docker compose down -v             # stop AND delete all stored data (fresh start)
+```
+
+#### Useful extras
+
+```bash
+docker compose ps                  # list running services + status
+docker compose logs -f ragbench    # follow the app's logs
+```
+
+`docker compose exec` needs the stack already running (Step 1). If you'd rather run
+a one-off task **without** starting the app first, use `run --rm` (spins up a
+temporary container and removes it when done):
+
+```bash
+docker compose run --rm ragbench \
+  uv run python -m ragbench.indexing.build --config configs/fiqa.yaml
+```
+
+> **Two things to know:**
+> - **Secrets:** Compose reads your `.env` automatically, so `ANTHROPIC_API_KEY`
+>   defined there is passed to the container — never hard-code it into the image.
+> - **Host vs. container:** inside Compose the app talks to Qdrant at
+>   `http://qdrant:6333` (already set). If you instead run indexing/eval **from
+>   your host** against the Compose Qdrant, set `QDRANT_URL=http://localhost:6333`.
 
 ### 6. Per-dataset knobs (`configs/{ds}.yaml`)
 
