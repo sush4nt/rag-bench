@@ -1,9 +1,6 @@
 # RAGBench
 
-> A production retrieval-strategy benchmarking platform. Same production patterns as
-> [mlserve](#) (FastAPI · Prometheus · Grafana · k6 · HuggingFace) — but instead of
-> comparing two inference runtimes, it compares **four retrieval pipelines** on the
-> same corpus and queries. The delta is the pipeline.
+> A production retrieval-strategy benchmarking platform. 
 
 **Stack:** Qdrant · FastAPI · React · BEIR metrics · RAGAS · MLflow · Prometheus / Grafana
 
