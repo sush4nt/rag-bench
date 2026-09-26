@@ -132,7 +132,7 @@
       "title": "Quality vs Latency — the thesis chart (NDCG@10 vs p95)",
       "gridPos": { "h": 10, "w": 16, "x": 0, "y": 15 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "Bottom-left = fast/lower quality (bm25). Top-right = slow/highest quality (reranked).",
+      "description": "NDCG@10 from the last retrieval-quality run versus live retrieve p95. Live p95 follows the top_k clients send. The offline quality run retrieves at depth 100 and is a different latency.",
       "fieldConfig": {
         "defaults": { "custom": { "pointSize": { "fixed": 12 } } },
         "overrides": [

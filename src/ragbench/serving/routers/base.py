@@ -15,6 +15,8 @@ from starlette.concurrency import run_in_threadpool
 
 from ragbench.common.logging import get_logger
 from ragbench.common.protocol import (
+    AskRequest,
+    AskResponse,
     BatchRetrieveRequest,
     BatchRetrieveResponse,
     RetrieveRequest,
@@ -71,6 +73,22 @@ def make_router(dataset: str) -> APIRouter:
         _require_available(dataset)
         return await _run_single(dataset, request)
 
+    @router.post("/ask", response_model=AskResponse)
+    async def ask(request: AskRequest) -> AskResponse:
+        """Retrieve with one pipeline, generate a cited answer, and return stage timings."""
+        _require_available(dataset)
+        from ragbench.generation.answer import GenerationFailed, GeneratorUnavailable
+        from ragbench.serving.ask import PipelineUnavailable, run_ask
+
+        try:
+            return await run_in_threadpool(run_ask, dataset, request)
+        except GeneratorUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except GenerationFailed as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except PipelineUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
     @router.post("/retrieve/batch", response_model=BatchRetrieveResponse)
     async def retrieve_batch(request: BatchRetrieveRequest) -> BatchRetrieveResponse:
         _require_available(dataset)
@@ -113,6 +131,26 @@ def make_router(dataset: str) -> APIRouter:
         summary["available"] = True
         return summary
 
+    @router.get("/serving/latest")
+    async def serving_latest() -> dict:
+        """Last serving-performance benchmark (top_k 5/10/20), separate from retrieval quality."""
+        _require_available(dataset)
+        import json
+
+        from ragbench.evaluation.serving_bench import serving_result_path
+
+        path = serving_result_path(dataset)
+        if not path.exists():
+            return {
+                "dataset": dataset,
+                "benchmark": "serving_performance",
+                "pipelines": {},
+                "available": False,
+            }
+        summary = json.loads(path.read_text())
+        summary["available"] = True
+        return summary
+
     @router.post("/eval/run")
     async def eval_run(req: EvalRunRequest, background_tasks: BackgroundTasks) -> dict:
         _require_available(dataset)
@@ -122,15 +160,17 @@ def make_router(dataset: str) -> APIRouter:
         config_path = str(repo_root() / f"configs/{dataset}.yaml")
 
         def _job():
-            summary = run_eval(
-                config_path, pipelines=req.pipelines, with_ragas=req.with_ragas
-            )
+            summary = run_eval(config_path, pipelines=req.pipelines, with_ragas=req.with_ragas)
             metrics.set_eval_gauges(summary)
             return summary
 
         if req.background:
             background_tasks.add_task(_job)
-            return {"status": "accepted", "dataset": dataset, "message": "eval running in background"}
+            return {
+                "status": "accepted",
+                "dataset": dataset,
+                "message": "eval running in background",
+            }
         summary = await run_in_threadpool(_job)
         return {"status": "completed", "summary": summary}
 

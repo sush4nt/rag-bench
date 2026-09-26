@@ -58,6 +58,8 @@ export interface EvalPipeline {
   "recall@100": number;
   p95_ms: number;
   p50_ms: number;
+  latency_scope?: string;
+  retrieval_depth?: number;
   ragas?: Record<string, number>;
 }
 

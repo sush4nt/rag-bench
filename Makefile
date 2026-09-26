@@ -58,6 +58,14 @@ eval-scifact: ## Run retrieval (+RAGAS) eval on SciFact, log to MLflow
 eval-fiqa: ## Run retrieval (+RAGAS) eval on FiQA, log to MLflow
 	$(UV) run python -m ragbench.evaluation.runner --config $(CONFIG_FIQA)
 
+.PHONY: serving-bench
+serving-bench: ## Serving latency at top_k 5/10/20 (BM25, all SciFact queries)
+	$(UV) run python -m ragbench.evaluation.serving_bench --config $(CONFIG_SCIFACT) --pipelines bm25 --max-queries 0
+
+.PHONY: serving-bench-http
+serving-bench-http: ## k6 HTTP serving bench; server must be up. Override with -e via env.
+	k6 run load_testing/serving_bench.js
+
 # ---------------------------------------------------------------------------
 # Ops
 # ---------------------------------------------------------------------------

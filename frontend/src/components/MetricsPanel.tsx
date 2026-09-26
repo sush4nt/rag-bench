@@ -32,7 +32,9 @@ export default function MetricsPanel({ dataset }: { dataset: string }) {
             <th className="px-4 py-2">NDCG@10</th>
             <th className="px-4 py-2">MRR@10</th>
             <th className="px-4 py-2">Recall@10</th>
-            <th className="px-4 py-2">p95 (ms)</th>
+            <th className="px-4 py-2" title="Latency of the quality run, which retrieves at max K">
+              p95 @ depth
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -52,12 +54,22 @@ export default function MetricsPanel({ dataset }: { dataset: string }) {
                 <td className="px-4 py-2 font-mono">{m["ndcg@10"].toFixed(4)}</td>
                 <td className="px-4 py-2 font-mono">{m["mrr@10"].toFixed(4)}</td>
                 <td className="px-4 py-2 font-mono">{m["recall@10"].toFixed(4)}</td>
-                <td className="px-4 py-2 font-mono">{m.p95_ms.toFixed(1)}</td>
+                <td className="px-4 py-2 font-mono">
+                  {m.p95_ms.toFixed(1)}
+                  {m.retrieval_depth != null ? (
+                    <span className="text-slate-500"> @{m.retrieval_depth}</span>
+                  ) : null}
+                </td>
               </tr>
             );
           })}
         </tbody>
       </table>
+      <p className="border-t border-slate-800 px-4 py-2 text-xs text-slate-500">
+        p95 is from the retrieval-quality run (retrieve at max K, usually 100). Serving
+        latency at top_k 5, 10, and 20 is a separate benchmark
+        (<code className="text-slate-400">make serving-bench</code>).
+      </p>
     </div>
   );
 }

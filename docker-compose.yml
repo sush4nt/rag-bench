@@ -10,6 +10,7 @@ services:
     environment:
       QDRANT_URL: http://qdrant:6333
       MLFLOW_TRACKING_URI: http://mlflow:5001
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       RAGBENCH_DEVICE: cpu
       HF_SPACE: "false"
     volumes:

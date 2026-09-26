@@ -20,14 +20,15 @@ PIPELINE_CLASSES: dict[str, type[Pipeline]] = {
 PIPELINE_CAPABILITIES: dict[str, dict[str, str]] = {
     "bm25": {"strategy": "Sparse lexical (bm25s)", "trade_off": "Fastest; misses semantics"},
     "dense": {"strategy": "Single-vector ANN (bge-large)", "trade_off": "Semantic; slower"},
-    "hybrid": {"strategy": "BM25 + Dense via RRF", "trade_off": "Best quality/latency balance"},
-    "reranked": {"strategy": "Hybrid + cross-encoder", "trade_off": "Highest quality; +60-120ms"},
+    "hybrid": {"strategy": "BM25 + Dense via RRF", "trade_off": "Fuses lexical and semantic ranks"},
+    "reranked": {
+        "strategy": "Hybrid + cross-encoder",
+        "trade_off": "Rescores top_k × multiplier candidates; latency scales with that set",
+    },
 }
 
 
 def build_pipeline(name: str, config: RagbenchConfig) -> Pipeline:
     if name not in PIPELINE_CLASSES:
-        raise ValueError(
-            f"Unknown pipeline '{name}'. Valid: {sorted(PIPELINE_CLASSES)}"
-        )
+        raise ValueError(f"Unknown pipeline '{name}'. Valid: {sorted(PIPELINE_CLASSES)}")
     return PIPELINE_CLASSES[name](config)

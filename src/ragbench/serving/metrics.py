@@ -9,10 +9,25 @@ from __future__ import annotations
 
 from prometheus_client import Counter, Gauge, Histogram
 
-# Latency buckets tuned for retrieval (1ms .. 5s).
+# Latency buckets tuned for retrieval (1ms .. 5s). Ask adds longer generation buckets.
 _LATENCY_BUCKETS = (
-    0.001, 0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.5, 0.75, 1.0, 2.0, 5.0,
+    0.001,
+    0.005,
+    0.01,
+    0.025,
+    0.05,
+    0.075,
+    0.1,
+    0.15,
+    0.2,
+    0.3,
+    0.5,
+    0.75,
+    1.0,
+    2.0,
+    5.0,
 )
+_ASK_BUCKETS = _LATENCY_BUCKETS + (10.0, 30.0, 60.0)
 
 RETRIEVE_LATENCY = Histogram(
     "ragbench_retrieve_latency_seconds",
@@ -36,9 +51,27 @@ INDEX_SIZE = Gauge(
     "Number of indexed passages per dataset",
     labelnames=("dataset",),
 )
+ASK_LATENCY = Histogram(
+    "ragbench_ask_latency_seconds",
+    "Online /ask latency by stage (retrieval, rerank, generation, total)",
+    labelnames=("dataset", "pipeline", "stage"),
+    buckets=_ASK_BUCKETS,
+)
+SERVING_P95_MS = Gauge(
+    "ragbench_serving_p95_ms",
+    "p95 latency from the serving-performance benchmark (milliseconds)",
+    labelnames=("dataset", "pipeline", "top_k", "concurrency"),
+)
+SERVING_QPS = Gauge(
+    "ragbench_serving_qps",
+    "Throughput from the serving-performance benchmark (requests/sec)",
+    labelnames=("dataset", "pipeline", "top_k", "concurrency"),
+)
 
 # Last-eval-run gauges (per dataset+pipeline).
-EVAL_NDCG10 = Gauge("ragbench_eval_ndcg_at_10", "NDCG@10 from last eval run", ("dataset", "pipeline"))
+EVAL_NDCG10 = Gauge(
+    "ragbench_eval_ndcg_at_10", "NDCG@10 from last eval run", ("dataset", "pipeline")
+)
 EVAL_MRR10 = Gauge("ragbench_eval_mrr_at_10", "MRR@10 from last eval run", ("dataset", "pipeline"))
 EVAL_RECALL10 = Gauge(
     "ragbench_eval_recall_at_10", "Recall@10 from last eval run", ("dataset", "pipeline")
@@ -47,7 +80,9 @@ RAGAS_FAITHFULNESS = Gauge(
     "ragbench_ragas_faithfulness", "Faithfulness from last RAGAS run", ("dataset", "pipeline")
 )
 RAGAS_ANSWER_RELEVANCE = Gauge(
-    "ragbench_ragas_answer_relevance", "Answer relevance from last RAGAS run", ("dataset", "pipeline")
+    "ragbench_ragas_answer_relevance",
+    "Answer relevance from last RAGAS run",
+    ("dataset", "pipeline"),
 )
 
 
@@ -62,6 +97,38 @@ def observe_retrieval(
 
 def set_index_size(dataset: str, passages: int) -> None:
     INDEX_SIZE.labels(dataset).set(passages)
+
+
+def observe_ask(
+    dataset: str,
+    pipeline: str,
+    *,
+    retrieval_s: float,
+    rerank_s: float | None,
+    generation_s: float,
+    total_s: float,
+) -> None:
+    ASK_LATENCY.labels(dataset, pipeline, "retrieval").observe(retrieval_s)
+    ASK_LATENCY.labels(dataset, pipeline, "generation").observe(generation_s)
+    ASK_LATENCY.labels(dataset, pipeline, "total").observe(total_s)
+    if rerank_s is not None:
+        ASK_LATENCY.labels(dataset, pipeline, "rerank").observe(rerank_s)
+
+
+def set_serving_gauges(summary: dict) -> None:
+    """Seed serving p95 and QPS gauges from a ``serving_latest.json`` summary."""
+    dataset = summary.get("dataset")
+    if not dataset:
+        return
+    for pipeline, data in summary.get("pipelines", {}).items():
+        cells = (data or {}).get("top_k") or {}
+        for top_k, payload in cells.items():
+            for concurrency, stats in (payload.get("concurrency") or {}).items():
+                labels = (dataset, pipeline, str(top_k), str(concurrency))
+                if "p95_ms" in stats:
+                    SERVING_P95_MS.labels(*labels).set(stats["p95_ms"])
+                if "qps" in stats:
+                    SERVING_QPS.labels(*labels).set(stats["qps"])
 
 
 def set_eval_gauges(summary: dict) -> None:

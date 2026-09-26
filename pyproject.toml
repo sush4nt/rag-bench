@@ -51,6 +51,7 @@ dev = [
 [project.scripts]
 ragbench-index = "ragbench.indexing.build:main"
 ragbench-eval = "ragbench.evaluation.runner:main"
+ragbench-serving-bench = "ragbench.evaluation.serving_bench:main"
 
 [build-system]
 requires = ["hatchling"]
