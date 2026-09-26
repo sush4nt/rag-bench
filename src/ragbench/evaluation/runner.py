@@ -1,8 +1,11 @@
-"""End-to-end eval runner: retrieval metrics (+ optional RAGAS) -> MLflow + JSON.
+"""End-to-end eval runner: retrieval-quality metrics (+ optional RAGAS) -> MLflow + JSON.
 
 Each pipeline produces one MLflow run under experiment ``ragbench/{dataset}``.
-Results are also written to ``data/{dataset}/eval_latest.json`` so the serving
-layer can seed its Prometheus gauges and the frontend MetricsPanel on startup.
+Results are written to ``data/{dataset}/eval_latest.json``. Latencies in that
+file are the cost of retrieving at ``max(k_values)`` so Recall@100 is defined.
+Serving latency at top_k 5/10/20 is a separate command:
+
+    python -m ragbench.evaluation.serving_bench --config configs/scifact.yaml
 
     python -m ragbench.evaluation.runner --config configs/fiqa.yaml
     python -m ragbench.evaluation.runner --config configs/scifact.yaml --no-ragas
@@ -33,8 +36,15 @@ def eval_result_path(dataset: str) -> Path:
     return dataset_dir(dataset) / "eval_latest.json"
 
 
-def _headline_metrics(metrics: dict[str, dict[str, float]], latency: dict[str, float]) -> dict:
-    """Flatten the metrics needed by gauges / the frontend."""
+def quality_headline(
+    metrics: dict[str, dict[str, float]], latency: dict[str, float], retrieval_depth: int
+) -> dict:
+    """Flatten quality metrics. Latency here is the cost of retrieving at ``retrieval_depth``.
+
+    Serving latency at top_k 5/10/20 lives in ``serving_latest.json``, not in these fields.
+    The unprefixed ``p50_ms`` / ``p95_ms`` keys are kept so existing gauges and the UI keep
+    reading, and ``latency_scope`` says they belong to the quality protocol.
+    """
     return {
         "ndcg@10": metrics["ndcg"].get("NDCG@10", 0.0),
         "mrr@10": metrics["mrr"].get("MRR@10", 0.0),
@@ -42,6 +52,8 @@ def _headline_metrics(metrics: dict[str, dict[str, float]], latency: dict[str, f
         "recall@100": metrics["recall"].get("Recall@100", 0.0),
         "map@100": metrics["map"].get("MAP@100", 0.0),
         "precision@10": metrics["precision"].get("Precision@10", 0.0),
+        "latency_scope": "quality",
+        "retrieval_depth": retrieval_depth,
         **latency,
     }
 
@@ -52,9 +64,7 @@ def _run_pipeline_retrieval(pipeline, queries: dict[str, str], qrels, k_values):
     latencies: list[float] = []
     top_k = max(k_values)
     for qid, text in queries.items():
-        resp = pipeline.retrieve(
-            RetrieveRequest(query=text, pipeline=pipeline.name, top_k=top_k)
-        )
+        resp = pipeline.retrieve(RetrieveRequest(query=text, pipeline=pipeline.name, top_k=top_k))
         results[qid] = {r.doc_id: r.score for r in resp.results}
         latencies.append(resp.latency_ms)
     metrics = evaluate_retrieval(qrels, results, k_values)
@@ -72,6 +82,8 @@ def _log_to_mlflow(cfg: RagbenchConfig, pipeline_name: str, headline: dict, raga
             mlflow.set_tag("pipeline", pipeline_name)
             mlflow.set_tag("embedding_model", cfg.indexing.embedding_model)
             for key, val in headline.items():
+                if isinstance(val, bool) or not isinstance(val, (int, float)):
+                    continue
                 mlflow.log_metric(key.replace("@", "_at_"), float(val))
             for key, val in ragas_means.items():
                 mlflow.log_metric(key, float(val))
@@ -84,10 +96,12 @@ def run_eval(
     pipelines: list[str] | None = None,
     with_ragas: bool = True,
     log_mlflow: bool = True,
+    with_serving: bool = False,
 ) -> dict:
     cfg = load_config(config_path)
     pipeline_names = pipelines or cfg.evaluation.pipelines
     k_values = cfg.evaluation.k_values
+    retrieval_depth = max(k_values)
 
     corpus, queries, qrels = load_dataset(
         cfg.dataset.beir_name, split=cfg.dataset.split, local_path=cfg.dataset.local_path
@@ -95,9 +109,11 @@ def run_eval(
 
     summary = {
         "dataset": cfg.dataset.name,
+        "benchmark": "retrieval_quality",
         "timestamp": datetime.now(UTC).isoformat(),
         "num_queries": len(queries),
         "num_passages": len(corpus),
+        "retrieval_depth": retrieval_depth,
         "pipelines": {},
     }
 
@@ -106,13 +122,14 @@ def run_eval(
         t0 = time.perf_counter()
         pipeline = build_pipeline(name, cfg)
         metrics, latency = _run_pipeline_retrieval(pipeline, queries, qrels, k_values)
-        headline = _headline_metrics(metrics, latency)
+        headline = quality_headline(metrics, latency, retrieval_depth)
         log.info(
-            "  '%s': NDCG@10=%.4f MRR@10=%.4f Recall@10=%.4f p95=%.1fms (%.1fs)",
+            "  '%s': NDCG@10=%.4f MRR@10=%.4f Recall@10=%.4f quality-p95@depth%d=%.1fms (%.1fs)",
             name,
             headline["ndcg@10"],
             headline["mrr@10"],
             headline["recall@10"],
+            retrieval_depth,
             headline["p95_ms"],
             time.perf_counter() - t0,
         )
@@ -134,6 +151,22 @@ def run_eval(
     ensure_dir(out_path.parent)
     out_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     log.info("Wrote eval summary -> %s", out_path)
+
+    from ragbench.evaluation.report import quality_statements
+
+    for line in quality_statements(
+        summary["pipelines"],
+        retrieval_depth=retrieval_depth,
+        rerank_multiplier=cfg.serving.rerank_multiplier,
+    ):
+        log.info("  %s", line)
+
+    if with_serving:
+        from ragbench.evaluation.serving_bench import run_serving_bench
+
+        log.info("Running serving-performance benchmark (separate from retrieval quality)")
+        run_serving_bench(config_path, pipelines=pipeline_names)
+
     return summary
 
 
@@ -164,12 +197,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pipelines", nargs="*", default=None)
     parser.add_argument("--no-ragas", action="store_true", help="Skip RAGAS generation eval")
     parser.add_argument("--no-mlflow", action="store_true", help="Skip MLflow logging")
+    parser.add_argument(
+        "--with-serving",
+        action="store_true",
+        help="Also run the serving-performance benchmark (top_k 5/10/20). Writes serving_latest.json.",
+    )
     args = parser.parse_args(argv)
     run_eval(
         args.config,
         pipelines=args.pipelines,
         with_ragas=not args.no_ragas,
         log_mlflow=not args.no_mlflow,
+        with_serving=args.with_serving,
     )
     return 0
 

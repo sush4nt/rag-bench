@@ -1,1 +1,1 @@
-"""Evaluation harness: BEIR retrieval metrics + RAGAS generation metrics."""
+"""Evaluation harness: retrieval-quality metrics, serving-performance benchmark, RAGAS."""

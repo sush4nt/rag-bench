@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 
 from ragbench.common.logging import get_logger
-from ragbench.common.paths import repo_root
+from ragbench.common.paths import dataset_dir, repo_root
 from ragbench.serving import metrics
 from ragbench.serving.registry import get_registry
 from ragbench.serving.routers import fiqa, scifact
@@ -50,13 +50,21 @@ def _seed_gauges() -> None:
         except Exception as exc:  # noqa: BLE001
             log.debug("Could not seed index size for %s: %s", dataset, exc)
 
-        eval_file = repo_root() / "data" / dataset / "eval_latest.json"
+        eval_file = dataset_dir(dataset) / "eval_latest.json"
         if eval_file.exists():
             try:
                 metrics.set_eval_gauges(json.loads(eval_file.read_text()))
                 log.info("Seeded eval gauges for '%s' from %s", dataset, eval_file)
             except Exception as exc:  # noqa: BLE001
                 log.warning("Failed to seed eval gauges for %s: %s", dataset, exc)
+
+        serving_file = dataset_dir(dataset) / "serving_latest.json"
+        if serving_file.exists():
+            try:
+                metrics.set_serving_gauges(json.loads(serving_file.read_text()))
+                log.info("Seeded serving gauges for '%s' from %s", dataset, serving_file)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Failed to seed serving gauges for %s: %s", dataset, exc)
 
 
 @asynccontextmanager

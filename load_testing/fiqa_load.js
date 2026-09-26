@@ -1,8 +1,7 @@
-// k6 load test — FiQA retrieval across all four pipelines.
-// Run: k6 run load_testing/fiqa_load.js  (override host with BASE_URL env var)
-//
-// Scenario: ramp 10 -> 50 VUs over ~2 min. Each request picks a random query and
-// a random pipeline. Latency thresholds are enforced PER pipeline via tags.
+// k6 smoke test — FiQA retrieval across all four pipelines at serving top_k=10.
+// This ramp mixes pipelines and is not the retrieval-quality benchmark (depth 100)
+// and not the per-pipeline serving matrix. For that matrix use serving_bench.js
+// with -e DATASET=fiqa.
 
 import http from "k6/http";
 import { check, sleep } from "k6";

@@ -65,6 +65,42 @@ def test_latency_percentiles_empty():
     assert p == {"p50_ms": 0.0, "p95_ms": 0.0, "p99_ms": 0.0, "mean_ms": 0.0}
 
 
+def test_quality_headline_labels_depth_latency():
+    from ragbench.evaluation.runner import quality_headline
+
+    headline = quality_headline(
+        {"ndcg": {"NDCG@10": 0.5}, "mrr": {}, "recall": {}, "map": {}, "precision": {}},
+        {"p50_ms": 1.0, "p95_ms": 2.0, "p99_ms": 3.0, "mean_ms": 1.5},
+        retrieval_depth=100,
+    )
+    assert headline["latency_scope"] == "quality"
+    assert headline["retrieval_depth"] == 100
+    assert headline["p95_ms"] == 2.0
+    assert headline["ndcg@10"] == 0.5
+
+
+def test_quality_statements_follow_measured_direction():
+    """SciFact numbers: dense leads @10; hybrid leads Recall@100; reranking is lower."""
+    from ragbench.evaluation.report import quality_statements
+
+    pipelines = {
+        "bm25": {"ndcg@10": 0.6863, "recall@10": 0.81867, "recall@100": 0.91267},
+        "dense": {"ndcg@10": 0.74099, "recall@10": 0.87656, "recall@100": 0.95167},
+        "hybrid": {"ndcg@10": 0.72049, "recall@10": 0.84522, "recall@100": 0.95833},
+        "reranked": {"ndcg@10": 0.66624, "recall@10": 0.79556, "recall@100": 0.937},
+    }
+    lines = quality_statements(pipelines, retrieval_depth=100, rerank_multiplier=5)
+    text = " ".join(lines)
+    assert "Dense NDCG@10 is 8.0% higher than BM25" in text
+    assert "Dense Recall@10 is 7.1% higher than BM25" in text
+    assert "Hybrid Recall@10 is 3.6% lower than dense" in text
+    assert "Hybrid Recall@100 is 0.7% higher than dense" in text
+    assert "Reranked NDCG@10 is 7.5% lower than hybrid" in text
+    assert "retrieval depth 100" in text
+    assert "500" in text
+    assert "top_k 5, 10, and 20" in text
+
+
 def test_build_qa_samples():
     from ragbench.evaluation.generation_eval import build_qa_samples
 

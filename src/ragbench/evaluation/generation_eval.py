@@ -17,6 +17,7 @@ import os
 from ragbench.common.logging import get_logger
 from ragbench.common.protocol import RetrieveRequest
 from ragbench.data.chunker import passage_text
+from ragbench.generation.answer import build_generator
 
 log = get_logger(__name__)
 
@@ -54,30 +55,6 @@ def build_qa_samples(
     return samples
 
 
-class AnthropicGenerator:
-    """Thin wrapper around the Anthropic Messages API for answer generation."""
-
-    def __init__(self, model: str):
-        import anthropic  # lazy
-
-        self.model = model
-        self.client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-
-    def generate(self, question: str, contexts: list[str]) -> str:
-        context_block = "\n\n".join(f"[{i + 1}] {c}" for i, c in enumerate(contexts))
-        prompt = (
-            "Answer the question using ONLY the context below. "
-            "If the context is insufficient, say so.\n\n"
-            f"Context:\n{context_block}\n\nQuestion: {question}\nAnswer:"
-        )
-        msg = self.client.messages.create(
-            model=self.model,
-            max_tokens=400,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return msg.content[0].text.strip()
-
-
 def _ragas_llm(model: str):
     """Build a RAGAS-compatible LLM wrapper backed by Anthropic."""
     from langchain_anthropic import ChatAnthropic
@@ -112,11 +89,9 @@ def run_ragas_eval(
             faithfulness,
         )
     except ImportError as exc:  # pragma: no cover - optional extra
-        raise RuntimeError(
-            "RAGAS extras not installed. Run: uv sync --extra ragas"
-        ) from exc
+        raise RuntimeError("RAGAS extras not installed. Run: uv sync --extra ragas") from exc
 
-    generator = AnthropicGenerator(ragas_llm_model)
+    generator = build_generator(ragas_llm_model)
     judge = _ragas_llm(ragas_llm_model)
 
     rows: list[dict] = []
@@ -125,7 +100,7 @@ def run_ragas_eval(
             RetrieveRequest(query=sample["question"], pipeline=pipeline.name, top_k=top_k)
         )
         contexts = [r.text for r in resp.results] or [""]
-        answer = generator.generate(sample["question"], contexts)
+        answer = generator.generate(sample["question"], contexts).text
         rows.append(
             {
                 "question": sample["question"],

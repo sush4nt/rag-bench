@@ -15,12 +15,14 @@ UI) · BEIR metrics · RAGAS · MLflow · Prometheus / Grafana
 |------------|--------------------------------------|---------------------------------------------|
 | `bm25`     | Keyword search (`bm25s`)             | Fastest; strong on exact words              |
 | `dense`    | Meaning-based search (`bge-large`)   | Finds related ideas; slower to build        |
-| `hybrid`   | Keywords + meaning, fused in Qdrant  | Best balance of quality and speed           |
-| `reranked` | Hybrid, then a second scoring pass   | Highest quality; adds about 60–120 ms       |
+| `hybrid`   | Keywords + meaning, fused with RRF   | Combines lexical and semantic ranks         |
+| `reranked` | Hybrid, then a cross-encoder         | Rescores a wider candidate set              |
 
-Quality is NDCG@10, MRR@10, and Recall@10. Speed is p50 / p95 / p99 latency.
-Answer quality (did the generated reply stay faithful to the passages?) is a
-separate, optional step called **RAGAS**. Grafana plots quality against latency.
+Retrieval quality (NDCG@10, MRR@10, Recall@10, Recall@100) comes from a run that
+retrieves at depth 100, so the @100 metrics are defined. Serving speed (p50, p95,
+p99, throughput) comes from a separate run at top_k 5, 10, and 20. Answer
+faithfulness is an optional third step, **RAGAS**. The measured SciFact comparison
+is in [Evaluation](#evaluation).
 
 ---
 
@@ -219,6 +221,20 @@ curl -s localhost:8080/api/scifact/retrieve/batch \
 
 Leave `pipelines` out of a batch request to run all four.
 
+To generate a cited answer from the same retrieval path, call `/ask`. This needs
+the Anthropic SDK (`uv sync --extra ragas`) and `ANTHROPIC_API_KEY`:
+
+```bash
+curl -s localhost:8080/api/scifact/ask \
+  -H 'content-type: application/json' \
+  -d '{"query":"Does aspirin lower colorectal cancer risk?","pipeline":"reranked","top_k":5}'
+```
+
+The body has `answer`, `citations` (the `index` matches `[1]`, `[2]` in the
+answer), `retrieved_chunks`, `retrieval_ms`, `rerank_ms`, `generation_ms`,
+`total_ms`, and `token_usage`. `pipeline` defaults to `reranked`. `generation_model`
+defaults to `evaluation.ragas_llm` in the dataset config.
+
 Switch the dataset by changing both the URL and the config you indexed:
 `/api/scifact` goes with `configs/scifact.yaml`, `/api/fiqa` with
 `configs/fiqa.yaml`.
@@ -253,6 +269,7 @@ uv run python -m ragbench.evaluation.runner \
 | `--pipelines a b …` | Score only these (default: `evaluation.pipelines` in the YAML) |
 | `--no-ragas` | Skip answer-quality scoring. No API key. |
 | `--no-mlflow` | Skip MLflow. Still writes `data/{dataset}/eval_latest.json` |
+| `--with-serving` | After the quality run, also write `data/{dataset}/serving_latest.json` |
 
 Runs show up at http://localhost:5001.
 
@@ -373,6 +390,15 @@ curl -s localhost:8080/api/scifact/retrieve \
   -d '{"query":"aspirin colorectal cancer","pipeline":"hybrid","top_k":5}'
 ```
 
+A cited answer uses the same retrieval pipeline, then an LLM. Same extra and key
+as RAGAS:
+
+```bash
+curl -s localhost:8080/api/scifact/ask \
+  -H 'content-type: application/json' \
+  -d '{"query":"Does aspirin lower colorectal cancer risk?","pipeline":"reranked","top_k":5}'
+```
+
 ### B5. (Optional) Run an evaluation
 
 ```bash
@@ -419,8 +445,9 @@ or Path B:
 | React dev server | `make frontend` | `npm install && npm run dev` in `frontend/` |
 | Evaluate SciFact | `make eval-scifact` | `uv run python -m ragbench.evaluation.runner --config configs/scifact.yaml` |
 | Evaluate FiQA | `make eval-fiqa` | same, with `configs/fiqa.yaml` |
+| Serving latency | `make serving-bench` | in-process BM25 latency at top_k 5/10/20 |
 | Tests | `make test` | `uv run pytest` |
-| Load test | `make load-test` | `k6 run load_testing/fiqa_load.js` |
+| Load test | `make load-test` | `k6 run load_testing/fiqa_load.js` (mixed-pipeline smoke test) |
 
 `make help` prints this list from the Makefile.
 
@@ -444,6 +471,7 @@ configs/fiqa.yaml      # the benchmark (57,638 passages, 648 queries)
 Names: **`bm25` · `dense` · `hybrid` · `reranked`**.
 
 - **One request:** `"pipeline": "dense"` on `POST /api/{dataset}/retrieve`.
+- **A cited answer:** `"pipeline": "reranked"` on `POST /api/{dataset}/ask` (needs the RAGAS extra and `ANTHROPIC_API_KEY`).
 - **Several at once:** `"pipelines": ["bm25", "reranked"]` on `POST /api/{dataset}/retrieve/batch`.
 - **An offline eval:** `--pipelines bm25 hybrid` on the evaluation runner.
 - **The default list:** `evaluation.pipelines` in the dataset YAML. The UI checkboxes override it per request.
@@ -494,7 +522,7 @@ diagrams natively.
 ```mermaid
 flowchart LR
   UI["React + Vite UI<br/>/fiqa · /scifact · /metrics"]
-  R["FastAPI routers<br/>/api/{ds}/retrieve · /status · /eval"]
+  R["FastAPI routers<br/>/api/{ds}/retrieve · /ask · /status · /eval"]
   REG["Pipeline registry<br/>lazy build + cache"]
   MET["GET /metrics<br/>(Prometheus instrumentator)"]
   BM["bm25s index<br/>(on disk)"]
@@ -649,7 +677,7 @@ src/ragbench/
   data/        BEIR loader + passage normalization
   indexing/    bm25s + Qdrant index builders, build CLI
   retrieval/   base + bm25/dense/hybrid/reranked pipelines, shared embedder
-  evaluation/  BEIR metrics, RAGAS gen eval, MLflow runner
+  evaluation/  retrieval-quality metrics, serving benchmark, RAGAS, MLflow runner
   serving/     FastAPI app, dataset routers, registry, Prometheus metrics
 frontend/      React + Vite + Tailwind (two dataset pages, side-by-side grid)
 monitoring/    Prometheus config + provisioned Grafana dashboard
@@ -670,24 +698,107 @@ tests/         pytest suite (pipelines, eval, api)
 
 ## Evaluation
 
-- **Retrieval:** NDCG@k, MRR@k, Recall@k, Precision@k, MAP@k (trec_eval/BEIR
-  definitions, implemented dependency-free in `evaluation/retrieval_eval.py`).
+- **Retrieval quality:** NDCG@k, MRR@k, Recall@k, Precision@k, MAP@k at cutoffs
+  1, 5, 10, and 100. The runner retrieves `max(k)` passages (depth 100) so
+  Recall@100 is defined. Those latencies are the cost of that protocol. See
+  `evaluation/retrieval_eval.py` and `data/{dataset}/eval_latest.json`.
+- **Serving performance:** p50 / p95 / p99, throughput, error rate, CPU, and
+  process memory at top_k 5, 10, and 20. Default concurrency is 1 and 10
+  in-flight requests. `--concurrency 1 10 50` adds a 50-request cell; on this
+  CPU that cell was much slower for dense embedding, so the published matrix
+  below stops at 10. See `evaluation/serving_bench.py` and
+  `data/{dataset}/serving_latest.json`.
 - **Generation (RAGAS, opt-in):** Faithfulness, Answer Relevance, Context Recall,
   Context Precision. Runs on a sample (default 100 queries) with `claude-3-haiku`
-  as judge. Requires `--extra ragas` and `ANTHROPIC_API_KEY`.
+  as judge. Requires `--extra ragas` and `ANTHROPIC_API_KEY`. The same generator
+  backs `POST /api/{dataset}/ask`.
 
-Every eval run logs one MLflow run per pipeline under `ragbench/{dataset}` and
-writes `data/{dataset}/eval_latest.json`, which seeds the Prometheus gauges the
-Grafana dashboard reads.
+Every quality run logs one MLflow run per pipeline under `ragbench/{dataset}`
+and writes `eval_latest.json`, which seeds the Prometheus quality gauges.
+`make serving-bench` writes `serving_latest.json` and seeds the serving gauges.
+
+### SciFact retrieval quality (test split, depth 100)
+
+Retrieval-only run on 300 queries and 5,183 abstracts (`--no-ragas`), logged
+2026-09-25 under MLflow experiment `ragbench/scifact`. Dense, hybrid, and
+reranked embed with `BAAI/bge-large-en-v1.5`. Reranked then rescores with
+`cross-encoder/ms-marco-MiniLM-L-6-v2`, which at this depth scores about
+500 candidates (`100 × rerank_multiplier 5`). CPU.
+
+| Pipeline | NDCG@10 | Recall@10 | MRR@10 | Recall@100 | MAP@100 | p95 at depth 100 |
+|---|---:|---:|---:|---:|---:|---:|
+| dense | 0.741 | 0.877 | 0.705 | 0.952 | 0.698 | 283 ms |
+| hybrid | 0.720 | 0.845 | 0.689 | 0.958 | 0.681 | 288 ms |
+| bm25 | 0.686 | 0.819 | 0.649 | 0.913 | 0.644 | 0.47 ms |
+| reranked | 0.666 | 0.796 | 0.632 | 0.937 | 0.626 | 38.0 s |
+
+- Dense NDCG@10 is 8.0% higher than BM25 (0.741 vs 0.686). Dense Recall@10 is 7.1% higher than BM25 (0.877 vs 0.819).
+- Hybrid Recall@10 is 3.6% lower than dense (0.845 vs 0.877). Hybrid Recall@100 is 0.7% higher than dense (0.958 vs 0.952).
+- Reranked NDCG@10 is 7.5% lower than hybrid (0.666 vs 0.720). On this corpus the MS MARCO cross-encoder does not improve SciFact ranking.
+- Precision@10 stays near 0.09 on every pipeline because most claims have a single gold abstract, so nine of the ten hits are non-relevant.
+- RAGAS scores were not collected on this run. FiQA has no published quality run yet.
+
+The p95 column above is the quality protocol (depth 100). Serving latency at a normal top_k is the next table.
+
+### SciFact serving performance
+
+In-process run on 26 Sep 2026, 100 queries drawn with seed 42, CPU, Qdrant local.
+Latency is the time inside retrieval once a worker has the request, with that
+many requests in flight. QPS is completed requests divided by wall-clock time.
+Error rate was 0. After the dense model loads, process peak RSS sits at about
+1.8 GB (BM25 alone is about 100 MB). The cross-encoder is called under a lock
+because parallel `predict` calls segfaulted.
+
+top_k 10, one request in flight:
+
+| Pipeline | p50 | p95 | p99 | QPS |
+|---|---:|---:|---:|---:|
+| bm25 | 0.10 ms | 0.13 ms | 0.14 ms | 9503 |
+| dense | 63 ms | 79 ms | 80 ms | 14.8 |
+| hybrid | 65 ms | 81 ms | 82 ms | 14.3 |
+| reranked | 607 ms | 2.17 s | 3.10 s | 1.3 |
+
+Same top_k with 10 requests in flight:
+
+| Pipeline | p50 | p95 | QPS |
+|---|---:|---:|---:|
+| bm25 | 1.17 ms | 2.31 ms | 7034 |
+| dense | 385 ms | 519 ms | 24.6 |
+| hybrid | 419 ms | 566 ms | 22.7 |
+| reranked | 6.57 s | 6.90 s | 1.5 |
+
+Reranked p50 at one request scales with the candidate set: 285 ms at top_k 5,
+607 ms at top_k 10, 1.17 s at top_k 20 (about 25, 50, and 100 cross-encoder
+pairs). The top_k 10 p95 of 2.17 s is a long tail; the mean was 796 ms.
+
+- Hybrid at top_k 10 adds about 2 ms of p95 over dense (81 ms vs 79 ms) and its QPS is 14.3 vs 14.8. On the quality run, hybrid Recall@10 is 3.6% lower than dense and Recall@100 is 0.7% higher.
+- Reranking at top_k 10 raises p50 from 65 ms (hybrid) to 607 ms and p95 from 81 ms to 2.17 s. On the quality run, reranked NDCG@10 is 7.5% lower than hybrid. The depth-100 quality p95 of 38 s is the cost of scoring about 500 pairs, which a top_k 10 request does not do.
+- Ten in-flight dense requests raise QPS from 14.8 to 24.6 and p95 from 79 ms to 519 ms. Reranked QPS stays near 1.5 because the scorer runs one request at a time.
+
+Reproduce with:
+
+```bash
+uv run python -m ragbench.evaluation.serving_bench \
+  --config configs/scifact.yaml \
+  --pipelines bm25 dense hybrid reranked \
+  --top-k 5 10 20 --concurrency 1 10 \
+  --max-queries 100 --seed 42
+```
+
+`make serving-bench` is the BM25-only version of that command, over every SciFact query.
 
 ---
 
 ## Testing & load testing
 
 ```bash
-make test          # pytest (pipelines, eval, api)
-make load-test     # k6 against local serving
+make test            # pytest (pipelines, eval, api, /ask)
+make serving-bench   # in-process serving latency (BM25, all SciFact queries)
+make load-test       # k6 smoke test, mixed pipelines, top_k 10
 ```
+
+`load_testing/serving_bench.js` is the HTTP version of one serving cell
+(set `PIPELINE`, `TOP_K`, and `VUS`). It does not compute NDCG.
 
 The test suite runs without downloading `bge-large`: it builds a tiny bm25s index
 over a tuned SciFact-style fixture and exercises the API through it. Dense/hybrid/
