@@ -1,7 +1,8 @@
 # RAGBench
 
-A platform that runs the **same questions** over the **same documents** with four
-different search strategies, then compares quality and speed.
+RAGBench is a controlled experimentation and evaluation platform for comparing retrieval strategies in Retrieval-Augmented Generation systems.
+> A platform that runs the **same questions** over the **same documents** with four
+> different search strategies, then compares quality and speed.
 
 **Pieces involved:** Qdrant (vector database) · FastAPI (the API) · React (the web
 UI) · BEIR metrics · RAGAS · MLflow · Prometheus / Grafana
