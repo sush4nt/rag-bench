@@ -74,8 +74,9 @@ def run_ragas_eval(
 ):
     """Run RAGAS over ``qa_samples`` for one pipeline; return a pandas DataFrame.
 
-    Answers are produced with the same prompt, model and ``top_k`` as the online
-    ``/ask`` endpoint; ``ragas_llm_model`` is only the judge.
+    Answers use the same prompt and ``top_k`` as ``/ask``, but always Claude via
+    ``ragas_llm_model`` (judge and answer step). ``/ask`` may use a different
+    provider, such as OpenAI, without changing this eval.
 
     Raises a clear error if the optional deps / API key are missing.
     """
@@ -99,9 +100,7 @@ def run_ragas_eval(
         ) from exc
 
     generation_cfg = generation_cfg or GenerationConfig()
-    generator = AnthropicGenerator(
-        generation_cfg.model, generation_cfg.max_tokens, generation_cfg.temperature
-    )
+    generator = AnthropicGenerator(ragas_llm_model, max_tokens=400, temperature=0.0)
     judge = _ragas_llm(ragas_llm_model)
 
     rows: list[dict] = []

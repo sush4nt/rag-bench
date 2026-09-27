@@ -75,7 +75,7 @@ def test_generation_info(api_client):
     body = r.json()
     assert body["available"] is True
     assert body["provider"] == "fake"
-    assert body["model"] == "claude-haiku-4-5-20251001"
+    assert body["model"] == "gpt-5-nano"
 
 
 def test_ask_returns_cited_answer(api_client):

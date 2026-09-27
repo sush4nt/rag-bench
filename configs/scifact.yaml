@@ -34,11 +34,19 @@ reranker:
 
 generation:
   enabled: true
+  top_k_default: 5                   # passages fed to the LLM; same for every pipeline
+  max_context_chars: 2000            # per-passage cap to bound prompt tokens
+  # Toggle the /ask model by commenting one block and uncommenting the other.
+  # The active pair is used for every pipeline. RAGAS stays on evaluation.ragas_llm.
+  #
+  # --- Claude Haiku 4.5 (needs ANTHROPIC_API_KEY) ---
   provider: anthropic
-  model: claude-haiku-4-5-20251001   # pinned for every pipeline (cheapest Claude)
+  model: claude-haiku-4-5-20251001
+  max_tokens: 400
+  temperature: 0.0
+  
+  # --- GPT-5 nano (needs OPENAI_API_KEY). Cheaper; reasoning_effort keeps the hidden token spend down. ---
   # provider: openai
   # model: gpt-5-nano
-  top_k_default: 5                   # passages fed to the LLM
-  max_tokens: 400
-  temperature: 0.0                   # deterministic -> answers differ only by retrieval
-  max_context_chars: 2000            # per-passage cap to bound prompt tokens
+  # max_tokens: 1500                   # budget includes reasoning tokens; 400 often returns empty
+  # reasoning_effort: minimal

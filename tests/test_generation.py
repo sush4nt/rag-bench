@@ -63,6 +63,13 @@ def test_build_generator_disabled_raises():
         build_generator(GenerationConfig(enabled=False))
 
 
+def test_build_generator_openai_without_key(monkeypatch):
+    monkeypatch.setenv("RAGBENCH_GENERATION_PROVIDER", "openai")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    with pytest.raises(GenerationUnavailable, match="OPENAI_API_KEY"):
+        build_generator(GenerationConfig(provider="openai", model="gpt-5-nano"))
+
+
 def test_build_generator_anthropic_without_key(monkeypatch):
     monkeypatch.setenv("RAGBENCH_GENERATION_PROVIDER", "anthropic")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)

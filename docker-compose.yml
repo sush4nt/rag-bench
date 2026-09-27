@@ -14,6 +14,7 @@ services:
       HF_SPACE: "false"
       # Needed by POST /api/{dataset}/ask; interpolated from the host .env.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     volumes:
       # BM25 indexes + downloaded datasets persist on the host.
       - ./data:/app/data

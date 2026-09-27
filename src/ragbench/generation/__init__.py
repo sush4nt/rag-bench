@@ -1,7 +1,7 @@
 """Answer generation shared by the online ``/ask`` endpoint and offline RAGAS eval.
 
-Keeping one prompt + one generator guarantees the eval scores exactly what is
-served.
+``/ask`` and RAGAS share the prompt. The ``/ask`` model comes from
+``generation.provider``; RAGAS answers and the judge stay on Anthropic.
 """
 
 from ragbench.generation.citations import parse_citations
@@ -11,6 +11,7 @@ from ragbench.generation.generator import (
     GenerationResult,
     GenerationUnavailable,
     Generator,
+    OpenAIGenerator,
     build_generator,
 )
 from ragbench.generation.prompt import ABSTAIN_TOKEN, Prompt, build_prompt, is_abstention
@@ -20,6 +21,7 @@ __all__ = [
     "ABSTAIN_TOKEN",
     "AnthropicGenerator",
     "FakeGenerator",
+    "OpenAIGenerator",
     "GenerationResult",
     "GenerationUnavailable",
     "Generator",

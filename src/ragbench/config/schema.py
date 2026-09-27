@@ -64,17 +64,21 @@ class RerankerConfig(BaseModel):
 
 
 class GenerationConfig(BaseModel):
-    """Answer generation for ``POST /ask`` and the RAGAS answer step.
+    """Answer generation for ``POST /ask``.
 
     One pinned model serves every pipeline so answers differ only by retrieval.
+    Offline RAGAS stays on ``evaluation.ragas_llm`` (Anthropic) and does not
+    follow this provider.
     """
 
     enabled: bool = True
-    provider: Literal["anthropic", "fake"] = "anthropic"
+    provider: Literal["anthropic", "openai", "fake"] = "anthropic"
     model: str = "claude-haiku-4-5-20251001"
     top_k_default: int = 5
     max_tokens: int = 400
     temperature: float = 0.0
+    # gpt-5-nano spends this budget on hidden reasoning unless effort is minimal.
+    reasoning_effort: Literal["none", "minimal", "low", "medium", "high"] | None = None
     max_context_chars: int = 2000
 
 

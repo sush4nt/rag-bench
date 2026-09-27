@@ -4721,6 +4721,7 @@ ragas = [
     { name = "anthropic" },
     { name = "datasets" },
     { name = "langchain-anthropic" },
+    { name = "openai" },
     { name = "ragas" },
 ]
 
@@ -4741,6 +4742,7 @@ requires-dist = [
     { name = "langchain-anthropic", marker = "extra == 'ragas'", specifier = ">=0.2" },
     { name = "mlflow", specifier = ">=2.14" },
     { name = "numpy", specifier = ">=1.26" },
+    { name = "openai", marker = "extra == 'ragas'", specifier = ">=1.50" },
     { name = "pandas", specifier = ">=2.2" },
     { name = "prometheus-client", specifier = ">=0.20" },
     { name = "prometheus-fastapi-instrumentator", specifier = ">=7.0" },

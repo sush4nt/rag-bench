@@ -317,7 +317,7 @@ and you are not editing Python. Docker is the only install. Do the steps in orde
 cp .env.example .env
 ```
 
-Compose reads `.env` and passes `ANTHROPIC_API_KEY` into the app container.
+Compose reads `.env` and passes `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` into the app container.
 Leave it empty until you want RAGAS (step B5).
 
 ### B2. Start all five services
@@ -470,7 +470,7 @@ curl -s localhost:8080/api/fiqa/eval/latest
 | `evaluation.ragas_sample_size` | how many queries RAGAS scores (controls cost) |
 | `evaluation.ragas_llm` | RAGAS judge model (default `claude-haiku-4-5-20251001`) |
 | `reranker.model` | cross-encoder used by `reranked` |
-| `generation.model` | LLM for `/ask` and RAGAS answers, pinned for all pipelines (default `claude-haiku-4-5-20251001`) |
+| `generation.provider` / `generation.model` | LLM for `/ask` only, pinned for all pipelines. Comment-toggle Haiku vs `gpt-5-nano` in the YAML. RAGAS stays on `evaluation.ragas_llm` |
 | `generation.top_k_default` | passages sent to the LLM per `/ask` |
 | `generation.max_context_chars` | per-passage character cap (bounds prompt tokens) |
 | `generation.enabled` | set `false` to turn `/ask` off |
@@ -647,11 +647,15 @@ curl -s localhost:8080/api/fiqa/retrieve \
 ### `/ask` — end-to-end answers with citations
 
 `/ask` runs one pipeline, sends the top passages to the LLM and returns a grounded
-answer. The model is pinned in the dataset YAML (`generation.model`, default
-`claude-haiku-4-5-20251001`, the cheapest Claude model) and is the same for every pipeline, with `temperature: 0`,
-so differences between answers come from retrieval alone. Clients cannot choose the
-model. It needs `ANTHROPIC_API_KEY` (read from `.env`) and `uv sync --extra ragas`;
-without them `/ask` returns `503` with the reason.
+answer. The model is pinned in the dataset YAML (`generation.provider` and
+`generation.model`) and is the same for every pipeline, so differences between
+answers come from retrieval. Switch models by commenting the other block in
+`configs/{dataset}.yaml` (`anthropic` / Claude Haiku 4.5, or `openai` /
+`gpt-5-nano`). Clients cannot choose the model. `/ask` needs the matching key
+(`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`, read from `.env`) and
+`uv sync --extra ragas`; without them it returns `503` with the reason. Offline
+RAGAS does not follow this switch: the judge and its answer step stay on
+`evaluation.ragas_llm`.
 
 ```bash
 curl -s localhost:8080/api/scifact/ask \
