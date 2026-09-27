@@ -15,11 +15,15 @@ from starlette.concurrency import run_in_threadpool
 
 from ragbench.common.logging import get_logger
 from ragbench.common.protocol import (
+    AskRequest,
+    AskResponse,
     BatchRetrieveRequest,
     BatchRetrieveResponse,
     RetrieveRequest,
     RetrieveResponse,
 )
+from ragbench.generation import GenerationUnavailable, answer_question
+from ragbench.retrieval.base import Pipeline
 from ragbench.serving import metrics
 from ragbench.serving.registry import get_registry
 
@@ -43,16 +47,18 @@ def _require_available(dataset: str) -> None:
         )
 
 
-async def _run_single(dataset: str, request: RetrieveRequest) -> RetrieveResponse:
-    registry = get_registry()
+def _get_pipeline(dataset: str, name: str) -> Pipeline:
     try:
-        pipeline = registry.get_pipeline(dataset, request.pipeline)
+        return get_registry().get_pipeline(dataset, name)
     except Exception as exc:  # noqa: BLE001 - index/model may be missing
         raise HTTPException(
             status_code=503,
-            detail=f"Pipeline '{request.pipeline}' unavailable for '{dataset}': {exc}",
+            detail=f"Pipeline '{name}' unavailable for '{dataset}': {exc}",
         ) from exc
 
+
+async def _run_single(dataset: str, request: RetrieveRequest) -> RetrieveResponse:
+    pipeline = _get_pipeline(dataset, request.pipeline)
     response: RetrieveResponse = await run_in_threadpool(pipeline.retrieve, request)
     metrics.observe_retrieval(
         dataset,
@@ -82,6 +88,40 @@ def make_router(dataset: str) -> APIRouter:
         return BatchRetrieveResponse(
             query=request.query, dataset=dataset, responses=list(responses)
         )
+
+    @router.get("/generation")
+    async def generation() -> dict:
+        _require_available(dataset)
+        return get_registry().generation_info(dataset)
+
+    @router.post("/ask", response_model=AskResponse)
+    async def ask(request: AskRequest) -> AskResponse:
+        """Retrieve with one pipeline, generate a cited answer with the pinned LLM."""
+        _require_available(dataset)
+        registry = get_registry()
+        try:
+            generator = registry.get_generator(dataset)
+        except GenerationUnavailable as exc:
+            raise HTTPException(
+                status_code=503, detail=f"Generation unavailable for '{dataset}': {exc}"
+            ) from exc
+        pipeline = _get_pipeline(dataset, request.pipeline)
+
+        try:
+            response: AskResponse = await run_in_threadpool(
+                answer_question,
+                pipeline,
+                generator,
+                request,
+                registry.get_config(dataset).generation,
+            )
+        except Exception as exc:  # noqa: BLE001 - upstream LLM / Qdrant failure
+            log.exception("/ask failed for %s/%s", dataset, request.pipeline)
+            metrics.observe_ask_error(dataset, request.pipeline)
+            raise HTTPException(status_code=502, detail=f"Ask failed: {exc}") from exc
+
+        metrics.observe_ask(response)
+        return response
 
     @router.get("/status")
     async def status() -> dict:

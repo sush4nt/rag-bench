@@ -8,6 +8,7 @@ pipelines, eval, routers) is driven by this object.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, Field
@@ -45,7 +46,7 @@ class IndexingConfig(BaseModel):
 
 class EvaluationConfig(BaseModel):
     k_values: list[int] = Field(default_factory=lambda: [1, 5, 10, 100])
-    ragas_llm: str = "claude-3-haiku-20240307"
+    ragas_llm: str = "claude-haiku-4-5-20251001"
     ragas_sample_size: int = 100
     pipelines: list[str] = Field(
         default_factory=lambda: ["bm25", "dense", "hybrid", "reranked"]
@@ -62,6 +63,25 @@ class RerankerConfig(BaseModel):
     model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
 
+class GenerationConfig(BaseModel):
+    """Answer generation for ``POST /ask``.
+
+    One pinned model serves every pipeline so answers differ only by retrieval.
+    Offline RAGAS stays on ``evaluation.ragas_llm`` (Anthropic) and does not
+    follow this provider.
+    """
+
+    enabled: bool = True
+    provider: Literal["anthropic", "openai", "fake"] = "anthropic"
+    model: str = "claude-haiku-4-5-20251001"
+    top_k_default: int = 5
+    max_tokens: int = 400
+    temperature: float = 0.0
+    # gpt-5-nano spends this budget on hidden reasoning unless effort is minimal.
+    reasoning_effort: Literal["none", "minimal", "low", "medium", "high"] | None = None
+    max_context_chars: int = 2000
+
+
 class RagbenchConfig(BaseModel):
     dataset: DatasetConfig
     qdrant: QdrantConfig
@@ -69,6 +89,7 @@ class RagbenchConfig(BaseModel):
     evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
     serving: ServingConfig
     reranker: RerankerConfig = Field(default_factory=RerankerConfig)
+    generation: GenerationConfig = Field(default_factory=GenerationConfig)
 
     @property
     def name(self) -> str:

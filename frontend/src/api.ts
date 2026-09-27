@@ -36,6 +36,50 @@ export interface BatchRetrieveResponse {
   responses: RetrieveResponse[];
 }
 
+export interface Citation {
+  marker: number;
+  doc_id: string;
+  context_index: number;
+}
+
+export interface StageTimings {
+  retrieval_ms: number;
+  rerank_ms: number | null;
+  generation_ms: number;
+  total_ms: number;
+}
+
+export interface AskResponse {
+  query: string;
+  dataset: string;
+  pipeline: PipelineName;
+  model: string;
+  answer: string;
+  abstained: boolean;
+  citations: Citation[];
+  invalid_citations: number[];
+  contexts: RetrieveResult[];
+  timings: StageTimings;
+  token_usage: { input_tokens: number; output_tokens: number };
+}
+
+export interface GenerationInfo {
+  dataset: string;
+  enabled: boolean;
+  available: boolean;
+  reason: string | null;
+  provider: string;
+  model: string;
+  top_k_default: number;
+  max_tokens: number;
+  temperature: number;
+}
+
+export type AskState =
+  | { status: "loading" }
+  | { status: "done"; data: AskResponse }
+  | { status: "error"; error: string };
+
 export interface DatasetStatus {
   dataset: string;
   bm25_index_ready: boolean;
@@ -90,4 +134,14 @@ export const api = {
     }),
 
   evalLatest: (dataset: string) => jsonFetch<EvalSummary>(`/api/${dataset}/eval/latest`),
+
+  generationInfo: (dataset: string) =>
+    jsonFetch<GenerationInfo>(`/api/${dataset}/generation`),
+
+  ask: (dataset: string, query: string, pipeline: PipelineName) =>
+    jsonFetch<AskResponse>(`/api/${dataset}/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query, pipeline }),
+    }),
 };

@@ -28,11 +28,12 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY uv.lock* ./
 COPY src ./src
-RUN uv sync --no-dev
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --no-dev --extra ragas --frozen
 
 # Runtime assets.
 COPY configs ./configs
-COPY --from=frontend /frontend/dist ./frontend/dist
 
+COPY --from=frontend /frontend/dist ./frontend/dist
 EXPOSE 8080
 CMD ["uv", "run", "uvicorn", "ragbench.serving.app:app", "--host", "0.0.0.0", "--port", "8080"]

@@ -13,6 +13,12 @@ import threading
 from ragbench.common.logging import get_logger
 from ragbench.common.paths import bm25_index_dir, repo_root
 from ragbench.config.schema import RagbenchConfig, load_config
+from ragbench.generation.generator import (
+    GenerationUnavailable,
+    Generator,
+    build_generator,
+    resolve_provider,
+)
 from ragbench.retrieval.base import Pipeline
 from ragbench.retrieval.factory import PIPELINE_CAPABILITIES, build_pipeline
 
@@ -29,6 +35,7 @@ class PipelineRegistry:
     def __init__(self):
         self._lock = threading.Lock()
         self._pipelines: dict[tuple[str, str], Pipeline] = {}
+        self._generators: dict[str, Generator] = {}
         self._configs: dict[str, RagbenchConfig] = {}
         for name, rel in _CONFIG_FILES.items():
             path = repo_root() / rel
@@ -66,6 +73,35 @@ class PipelineRegistry:
 
     def pipeline_capabilities(self) -> dict[str, dict[str, str]]:
         return PIPELINE_CAPABILITIES
+
+    # --- generation ----------------------------------------------------------
+    def get_generator(self, dataset: str) -> Generator:
+        """Cached generator for ``dataset``; raises :class:`GenerationUnavailable`."""
+        if dataset in self._generators:
+            return self._generators[dataset]
+        with self._lock:
+            if dataset not in self._generators:
+                self._generators[dataset] = build_generator(self.get_config(dataset).generation)
+            return self._generators[dataset]
+
+    def generation_info(self, dataset: str) -> dict:
+        cfg = self.get_config(dataset).generation
+        try:
+            self.get_generator(dataset)
+            available, reason = True, None
+        except GenerationUnavailable as exc:
+            available, reason = False, str(exc)
+        return {
+            "dataset": dataset,
+            "enabled": cfg.enabled,
+            "available": available,
+            "reason": reason,
+            "provider": resolve_provider(cfg),
+            "model": cfg.model,
+            "top_k_default": cfg.top_k_default,
+            "max_tokens": cfg.max_tokens,
+            "temperature": cfg.temperature,
+        }
 
     # --- status --------------------------------------------------------------
     def status(self, dataset: str) -> dict:

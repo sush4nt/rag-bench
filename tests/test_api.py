@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from conftest import HEAVY
+
 
 def test_health(api_client):
     r = api_client.get("/health")
@@ -65,6 +67,74 @@ def test_datasets_meta_endpoint(api_client):
     assert r.status_code == 200
     names = {d["name"] for d in r.json()["datasets"]}
     assert "scifact" in names
+
+
+def test_generation_info(api_client):
+    r = api_client.get("/api/scifact/generation")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["available"] is True
+    assert body["provider"] == "fake"
+    assert body["model"] == "gpt-5-nano"
+
+
+def test_ask_returns_cited_answer(api_client):
+    r = api_client.post(
+        "/api/scifact/ask",
+        json={"query": "aspirin colorectal cancer", "pipeline": "bm25", "top_k": 3},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["pipeline"] == "bm25"
+    assert body["dataset"] == "scifact"
+    assert body["answer"]
+    assert body["abstained"] is False
+    assert len(body["contexts"]) == 3
+    context_ids = [c["doc_id"] for c in body["contexts"]]
+    for cit in body["citations"]:
+        assert context_ids[cit["context_index"]] == cit["doc_id"]
+    assert body["invalid_citations"] == []
+    t = body["timings"]
+    assert t["rerank_ms"] is None
+    assert {"retrieval_ms", "generation_ms", "total_ms"} <= set(t)
+    assert body["token_usage"]["input_tokens"] > 0
+
+
+def test_ask_uses_config_top_k_by_default(api_client):
+    r = api_client.post("/api/scifact/ask", json={"query": "vitamin d", "pipeline": "bm25"})
+    assert r.status_code == 200
+    assert len(r.json()["contexts"]) == 5
+
+
+def test_ask_rejects_unknown_pipeline(api_client):
+    r = api_client.post("/api/scifact/ask", json={"query": "x", "pipeline": "hybrid_reranked"})
+    assert r.status_code == 422
+
+
+def test_ask_503_when_generation_disabled(api_client, monkeypatch):
+    from ragbench.serving.registry import get_registry
+
+    registry = get_registry()
+    cfg = registry._configs["scifact"]
+    disabled = cfg.model_copy(
+        update={"generation": cfg.generation.model_copy(update={"enabled": False})}
+    )
+    monkeypatch.setitem(registry._configs, "scifact", disabled)
+    monkeypatch.setattr(registry, "_generators", {})
+
+    r = api_client.post("/api/scifact/ask", json={"query": "x", "pipeline": "bm25"})
+    assert r.status_code == 503
+    assert "disabled" in r.json()["detail"]
+    assert api_client.get("/api/scifact/generation").json()["available"] is False
+
+
+@HEAVY
+def test_ask_reranked_reports_rerank_stage(api_client):
+    r = api_client.post(
+        "/api/scifact/ask", json={"query": "aspirin colorectal cancer", "pipeline": "reranked"}
+    )
+    assert r.status_code == 200
+    assert r.json()["timings"]["rerank_ms"] > 0
 
 
 def test_missing_index_returns_503(api_client):

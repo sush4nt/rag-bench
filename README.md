@@ -317,7 +317,7 @@ and you are not editing Python. Docker is the only install. Do the steps in orde
 cp .env.example .env
 ```
 
-Compose reads `.env` and passes `ANTHROPIC_API_KEY` into the app container.
+Compose reads `.env` and passes `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` into the app container.
 Leave it empty until you want RAGAS (step B5).
 
 ### B2. Start all five services
@@ -468,8 +468,12 @@ curl -s localhost:8080/api/fiqa/eval/latest
 | `serving.rerank_multiplier` | how many extra hits the reranked pipeline fetches (`top_k × N`) |
 | `evaluation.pipelines` | default strategies for eval and the API |
 | `evaluation.ragas_sample_size` | how many queries RAGAS scores (controls cost) |
-| `evaluation.ragas_llm` | RAGAS judge model (default `claude-3-haiku`) |
+| `evaluation.ragas_llm` | RAGAS judge model (default `claude-haiku-4-5-20251001`) |
 | `reranker.model` | cross-encoder used by `reranked` |
+| `generation.provider` / `generation.model` | LLM for `/ask` only, pinned for all pipelines. Comment-toggle Haiku vs `gpt-5-nano` in the YAML. RAGAS stays on `evaluation.ragas_llm` |
+| `generation.top_k_default` | passages sent to the LLM per `/ask` |
+| `generation.max_context_chars` | per-passage character cap (bounds prompt tokens) |
+| `generation.enabled` | set `false` to turn `/ask` off |
 
 ### If something fails
 
@@ -626,6 +630,8 @@ All routes are mirrored under `/api/scifact` and `/api/fiqa`:
 |---|---|
 | `POST /api/{ds}/retrieve` | Single query, single pipeline |
 | `POST /api/{ds}/retrieve/batch` | One query across several pipelines (parallel) |
+| `POST /api/{ds}/ask` | End-to-end RAG: retrieve → (rerank) → generate a cited answer |
+| `GET  /api/{ds}/generation` | Generation settings + whether `/ask` is available |
 | `GET  /api/{ds}/status` | Index readiness + stats |
 | `GET  /api/{ds}/pipelines` | List pipelines + capabilities |
 | `POST /api/{ds}/eval/run` | Trigger an offline eval run → MLflow + gauges |
@@ -637,6 +643,33 @@ curl -s localhost:8080/api/fiqa/retrieve \
   -H 'content-type: application/json' \
   -d '{"query":"How does dollar cost averaging work?","pipeline":"hybrid","top_k":5}' | jq
 ```
+
+### `/ask` — end-to-end answers with citations
+
+`/ask` runs one pipeline, sends the top passages to the LLM and returns a grounded
+answer. The model is pinned in the dataset YAML (`generation.provider` and
+`generation.model`) and is the same for every pipeline, so differences between
+answers come from retrieval. Switch models by commenting the other block in
+`configs/{dataset}.yaml` (`anthropic` / Claude Haiku 4.5, or `openai` /
+`gpt-5-nano`). Clients cannot choose the model. `/ask` needs the matching key
+(`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`, read from `.env`) and
+`uv sync --extra ragas`; without them it returns `503` with the reason. Offline
+RAGAS does not follow this switch: the judge and its answer step stay on
+`evaluation.ragas_llm`.
+
+```bash
+curl -s localhost:8080/api/scifact/ask \
+  -H 'content-type: application/json' \
+  -d '{"query":"Aspirin lowers the risk of colorectal cancer.","pipeline":"reranked"}' | jq
+```
+
+The response contains `answer`, `citations` (each `[n]` marker resolved to a
+`doc_id`), `invalid_citations` (markers pointing at no retrieved passage),
+`abstained` (the model replied `INSUFFICIENT_CONTEXT`), the `contexts` it saw,
+`timings` (`retrieval_ms` excludes reranking; `rerank_ms`, `generation_ms`,
+`total_ms`) and `token_usage`. Offline RAGAS uses the same prompt and model, so its
+scores describe what `/ask` serves. In the UI, switch to **Retrieve + Generate** to
+compare the four answers side by side.
 
 ---
 
@@ -650,6 +683,7 @@ src/ragbench/
   indexing/    bm25s + Qdrant index builders, build CLI
   retrieval/   base + bm25/dense/hybrid/reranked pipelines, shared embedder
   evaluation/  BEIR metrics, RAGAS gen eval, MLflow runner
+  generation/  shared prompt, LLM generator, citation parsing, /ask service
   serving/     FastAPI app, dataset routers, registry, Prometheus metrics
 frontend/      React + Vite + Tailwind (two dataset pages, side-by-side grid)
 monitoring/    Prometheus config + provisioned Grafana dashboard
@@ -673,7 +707,7 @@ tests/         pytest suite (pipelines, eval, api)
 - **Retrieval:** NDCG@k, MRR@k, Recall@k, Precision@k, MAP@k (trec_eval/BEIR
   definitions, implemented dependency-free in `evaluation/retrieval_eval.py`).
 - **Generation (RAGAS, opt-in):** Faithfulness, Answer Relevance, Context Recall,
-  Context Precision. Runs on a sample (default 100 queries) with `claude-3-haiku`
+  Context Precision. Runs on a sample (default 100 queries) with Claude Haiku 4.5
   as judge. Requires `--extra ragas` and `ANTHROPIC_API_KEY`.
 
 Every eval run logs one MLflow run per pipeline under `ragbench/{dataset}` and

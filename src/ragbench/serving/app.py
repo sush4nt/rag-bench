@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from contextlib import asynccontextmanager
 
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
@@ -21,6 +22,9 @@ from ragbench.serving.registry import get_registry
 from ragbench.serving.routers import fiqa, scifact
 
 log = get_logger(__name__)
+
+# Picks up ANTHROPIC_API_KEY for /ask under `make serve`; real env vars win.
+load_dotenv(repo_root() / ".env", override=False)
 
 EXAMPLE_QUERIES = {
     "fiqa": [

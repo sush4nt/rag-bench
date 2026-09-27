@@ -54,6 +54,42 @@ def test_reranked_reports_reranker_latency_is_none_for_bm25(bm25_pipeline):
     assert resp.reranker_latency_ms is None
 
 
+def test_reranker_latency_is_isolated_per_thread():
+    """Concurrent requests on the shared reranked pipeline must not swap timings."""
+    import threading
+    import time
+
+    from ragbench.retrieval.reranked_pipeline import RerankedPipeline
+
+    class _Hybrid:
+        def _search(self, query, top_k):
+            return [RetrieveResult(doc_id=query, score=1.0, text=query)]
+
+    class _SleepyReranker:
+        def predict(self, pairs):
+            time.sleep(float(pairs[0][0]))
+            return [1.0]
+
+    pipeline = object.__new__(RerankedPipeline)
+    pipeline.hybrid, pipeline.reranker, pipeline.multiplier = _Hybrid(), _SleepyReranker(), 1
+    pipeline._local = threading.local()
+
+    observed: dict[str, float | None] = {}
+
+    def worker(delay: str):
+        pipeline._search(delay, 1)
+        time.sleep(0.25)  # outlast the other thread's rerank so it could overwrite us
+        observed[delay] = pipeline._pop_reranker_latency()
+
+    threads = [threading.Thread(target=worker, args=(d,)) for d in ("0.01", "0.15")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert observed["0.01"] < 100 < observed["0.15"]
+
+
 @HEAVY
 @pytest.mark.parametrize("name", ["dense", "hybrid", "reranked"])
 def test_heavy_pipelines(name, scifact_config):

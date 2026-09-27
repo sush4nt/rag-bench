@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from prometheus_client import Counter, Gauge, Histogram
 
+from ragbench.common.protocol import AskResponse
+
 # Latency buckets tuned for retrieval (1ms .. 5s).
 _LATENCY_BUCKETS = (
     0.001, 0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.5, 0.75, 1.0, 2.0, 5.0,
@@ -30,6 +32,25 @@ RERANKER_LATENCY = Histogram(
     "Cross-encoder reranking latency (reranked pipeline only)",
     labelnames=("dataset", "pipeline"),
     buckets=_LATENCY_BUCKETS,
+)
+# LLM calls take seconds, not milliseconds.
+_GENERATION_BUCKETS = (0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0, 8.0, 13.0, 20.0, 30.0)
+
+GENERATION_LATENCY = Histogram(
+    "ragbench_generation_latency_seconds",
+    "LLM answer-generation latency for /ask",
+    labelnames=("dataset", "pipeline", "model"),
+    buckets=_GENERATION_BUCKETS,
+)
+GENERATION_TOKENS = Counter(
+    "ragbench_generation_tokens_total",
+    "LLM tokens consumed by /ask",
+    labelnames=("dataset", "pipeline", "model", "direction"),
+)
+ASK_REQUESTS = Counter(
+    "ragbench_ask_requests_total",
+    "/ask requests by outcome (answered | abstained | error)",
+    labelnames=("dataset", "pipeline", "outcome"),
 )
 INDEX_SIZE = Gauge(
     "ragbench_index_size_passages",
@@ -58,6 +79,25 @@ def observe_retrieval(
     RETRIEVE_LATENCY.labels(dataset, pipeline).observe(latency_s)
     if reranker_latency_s is not None:
         RERANKER_LATENCY.labels(dataset, pipeline).observe(reranker_latency_s)
+
+
+def observe_ask(response: AskResponse) -> None:
+    d, p, m = response.dataset, response.pipeline, response.model
+    t = response.timings
+    observe_retrieval(
+        d,
+        p,
+        (t.retrieval_ms + (t.rerank_ms or 0.0)) / 1000.0,
+        (t.rerank_ms / 1000.0) if t.rerank_ms else None,
+    )
+    GENERATION_LATENCY.labels(d, p, m).observe(t.generation_ms / 1000.0)
+    GENERATION_TOKENS.labels(d, p, m, "input").inc(response.token_usage.input_tokens)
+    GENERATION_TOKENS.labels(d, p, m, "output").inc(response.token_usage.output_tokens)
+    ASK_REQUESTS.labels(d, p, "abstained" if response.abstained else "answered").inc()
+
+
+def observe_ask_error(dataset: str, pipeline: str) -> None:
+    ASK_REQUESTS.labels(dataset, pipeline, "error").inc()
 
 
 def set_index_size(dataset: str, passages: int) -> None:

@@ -16,7 +16,10 @@ import os
 
 from ragbench.common.logging import get_logger
 from ragbench.common.protocol import RetrieveRequest
+from ragbench.config.schema import GenerationConfig
 from ragbench.data.chunker import passage_text
+from ragbench.generation.generator import AnthropicGenerator
+from ragbench.generation.prompt import build_prompt, context_texts
 
 log = get_logger(__name__)
 
@@ -54,30 +57,6 @@ def build_qa_samples(
     return samples
 
 
-class AnthropicGenerator:
-    """Thin wrapper around the Anthropic Messages API for answer generation."""
-
-    def __init__(self, model: str):
-        import anthropic  # lazy
-
-        self.model = model
-        self.client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-
-    def generate(self, question: str, contexts: list[str]) -> str:
-        context_block = "\n\n".join(f"[{i + 1}] {c}" for i, c in enumerate(contexts))
-        prompt = (
-            "Answer the question using ONLY the context below. "
-            "If the context is insufficient, say so.\n\n"
-            f"Context:\n{context_block}\n\nQuestion: {question}\nAnswer:"
-        )
-        msg = self.client.messages.create(
-            model=self.model,
-            max_tokens=400,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return msg.content[0].text.strip()
-
-
 def _ragas_llm(model: str):
     """Build a RAGAS-compatible LLM wrapper backed by Anthropic."""
     from langchain_anthropic import ChatAnthropic
@@ -90,10 +69,14 @@ def run_ragas_eval(
     pipeline,
     qa_samples: list[dict],
     ragas_llm_model: str,
+    generation_cfg: GenerationConfig | None = None,
     sample_size: int = 100,
-    top_k: int = 5,
 ):
     """Run RAGAS over ``qa_samples`` for one pipeline; return a pandas DataFrame.
+
+    Answers use the same prompt and ``top_k`` as ``/ask``, but always Claude via
+    ``ragas_llm_model`` (judge and answer step). ``/ask`` may use a different
+    provider, such as OpenAI, without changing this eval.
 
     Raises a clear error if the optional deps / API key are missing.
     """
@@ -116,16 +99,22 @@ def run_ragas_eval(
             "RAGAS extras not installed. Run: uv sync --extra ragas"
         ) from exc
 
-    generator = AnthropicGenerator(ragas_llm_model)
+    generation_cfg = generation_cfg or GenerationConfig()
+    generator = AnthropicGenerator(ragas_llm_model, max_tokens=400, temperature=0.0)
     judge = _ragas_llm(ragas_llm_model)
 
     rows: list[dict] = []
     for sample in qa_samples[:sample_size]:
         resp = pipeline.retrieve(
-            RetrieveRequest(query=sample["question"], pipeline=pipeline.name, top_k=top_k)
+            RetrieveRequest(
+                query=sample["question"],
+                pipeline=pipeline.name,
+                top_k=generation_cfg.top_k_default,
+            )
         )
-        contexts = [r.text for r in resp.results] or [""]
-        answer = generator.generate(sample["question"], contexts)
+        prompt = build_prompt(sample["question"], resp.results, generation_cfg.max_context_chars)
+        answer = generator.generate(prompt).text
+        contexts = context_texts(resp.results, generation_cfg.max_context_chars) or [""]
         rows.append(
             {
                 "question": sample["question"],

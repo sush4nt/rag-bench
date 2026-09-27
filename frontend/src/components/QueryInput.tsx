@@ -4,9 +4,15 @@ interface Props {
   examples: string[];
   loading: boolean;
   onSubmit: (query: string) => void;
+  submitLabel?: string;
 }
 
-export default function QueryInput({ examples, loading, onSubmit }: Props) {
+export default function QueryInput({
+  examples,
+  loading,
+  onSubmit,
+  submitLabel = "Compare",
+}: Props) {
   const [value, setValue] = useState("");
 
   const submit = () => {
@@ -28,7 +34,7 @@ export default function QueryInput({ examples, loading, onSubmit }: Props) {
           disabled={loading || !value.trim()}
           className="rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-500 disabled:opacity-40"
         >
-          {loading ? "Running…" : "Compare"}
+          {loading ? "Running…" : submitLabel}
         </button>
       </div>
       <div className="flex flex-wrap gap-2">

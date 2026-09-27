@@ -58,3 +58,49 @@ class BatchRetrieveResponse(BaseModel):
     query: str
     dataset: str
     responses: list[RetrieveResponse]
+
+
+class AskRequest(BaseModel):
+    """Retrieve with one pipeline, then generate a cited answer.
+
+    The generation model is fixed server-side (``generation.model`` in the
+    dataset config) so every pipeline is compared with the same LLM.
+    """
+
+    query: str = Field(..., min_length=1)
+    pipeline: PipelineName
+    top_k: int | None = Field(None, ge=1, le=20, description="Passages fed to the LLM")
+
+
+class Citation(BaseModel):
+    """A ``[n]`` marker in the answer, resolved to a retrieved passage."""
+
+    marker: int
+    doc_id: str
+    context_index: int
+
+
+class TokenUsage(BaseModel):
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+class StageTimings(BaseModel):
+    retrieval_ms: float  # first-stage retrieval only (excludes reranking)
+    rerank_ms: float | None = None
+    generation_ms: float
+    total_ms: float
+
+
+class AskResponse(BaseModel):
+    query: str
+    dataset: str
+    pipeline: str
+    model: str
+    answer: str
+    abstained: bool
+    citations: list[Citation]
+    invalid_citations: list[int]  # markers that point at no retrieved passage
+    contexts: list[RetrieveResult]
+    timings: StageTimings
+    token_usage: TokenUsage
