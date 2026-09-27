@@ -1,13 +1,18 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ALL_PIPELINES,
   api,
+  AskState,
   DatasetInfo,
   DatasetStatus,
+  GenerationInfo,
   PipelineName,
   RetrieveResponse,
 } from "../api";
+import AnswerComparison from "./AnswerComparison";
+import AnswerGrid from "./AnswerGrid";
 import MetricsPanel from "./MetricsPanel";
+import ModeToggle, { Mode } from "./ModeToggle";
 import PipelineSelector from "./PipelineSelector";
 import QueryInput from "./QueryInput";
 import ResultsGrid from "./ResultsGrid";
@@ -33,11 +38,29 @@ export default function DatasetView({ dataset }: { dataset: string }) {
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<DatasetStatus | null>(null);
   const [info, setInfo] = useState<DatasetInfo | null>(null);
+  const [mode, setMode] = useState<Mode>("retrieve");
+  const [generation, setGeneration] = useState<GenerationInfo | null>(null);
+  const [askStates, setAskStates] = useState<Partial<Record<PipelineName, AskState>>>({});
+  const [askPipelines, setAskPipelines] = useState<PipelineName[]>([]);
+  // Ignores late responses from a previous question.
+  const runId = useRef(0);
 
   useEffect(() => {
     setResponses([]);
+    setAskStates({});
     setError(null);
+    runId.current += 1;
     api.status(dataset).then(setStatus).catch(() => setStatus(null));
+    api
+      .generationInfo(dataset)
+      .then((g) => {
+        setGeneration(g);
+        if (!g.available) setMode("retrieve");
+      })
+      .catch(() => {
+        setGeneration(null);
+        setMode("retrieve");
+      });
     api
       .datasets()
       .then((d) => setInfo(d.datasets.find((x) => x.name === dataset) ?? null))
@@ -49,11 +72,41 @@ export default function DatasetView({ dataset }: { dataset: string }) {
     [info, dataset]
   );
 
+  const ask = async (query: string) => {
+    const id = ++runId.current;
+    const pipelines = [...selected];
+    setError(null);
+    setAskPipelines(pipelines);
+    setAskStates(Object.fromEntries(pipelines.map((p) => [p, { status: "loading" }])));
+    setLoading(true);
+    // One request per pipeline so each column fills in as soon as it's ready
+    // and one failure doesn't blank the others.
+    await Promise.allSettled(
+      pipelines.map((p) =>
+        api.ask(dataset, query, p).then(
+          (data) => {
+            if (runId.current === id)
+              setAskStates((s) => ({ ...s, [p]: { status: "done", data } }));
+          },
+          (e) => {
+            if (runId.current === id)
+              setAskStates((s) => ({
+                ...s,
+                [p]: { status: "error", error: String(e instanceof Error ? e.message : e) },
+              }));
+          }
+        )
+      )
+    );
+    if (runId.current === id) setLoading(false);
+  };
+
   const run = async (query: string) => {
     if (selected.length === 0) {
       setError("Select at least one pipeline.");
       return;
     }
+    if (mode === "generate") return ask(query);
     setLoading(true);
     setError(null);
     try {
@@ -95,7 +148,13 @@ export default function DatasetView({ dataset }: { dataset: string }) {
       </div>
 
       <div className="flex flex-col gap-4 rounded-2xl border border-slate-800 bg-slate-900/30 p-4">
-        <QueryInput examples={examples} loading={loading} onSubmit={run} />
+        <ModeToggle mode={mode} onChange={setMode} generation={generation} />
+        <QueryInput
+          examples={examples}
+          loading={loading}
+          onSubmit={run}
+          submitLabel={mode === "generate" ? "Ask" : "Compare"}
+        />
         <PipelineSelector selected={selected} onChange={setSelected} />
       </div>
 
@@ -105,7 +164,14 @@ export default function DatasetView({ dataset }: { dataset: string }) {
         </div>
       )}
 
-      <ResultsGrid responses={responses} loading={loading} selectedCount={selected.length} />
+      {mode === "generate" ? (
+        <>
+          <AnswerComparison pipelines={askPipelines} states={askStates} />
+          <AnswerGrid pipelines={askPipelines} states={askStates} />
+        </>
+      ) : (
+        <ResultsGrid responses={responses} loading={loading} selectedCount={selected.length} />
+      )}
 
       <div>
         <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-400">

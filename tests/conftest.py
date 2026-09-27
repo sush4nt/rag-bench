@@ -15,6 +15,8 @@ import tempfile
 _TMP_DATA = tempfile.mkdtemp(prefix="ragbench_test_data_")
 os.environ["RAGBENCH_DATA_DIR"] = _TMP_DATA
 os.environ.setdefault("HF_SPACE", "false")
+# Never hit a paid LLM from the test suite.
+os.environ["RAGBENCH_GENERATION_PROVIDER"] = "fake"
 
 import pytest  # noqa: E402
 

@@ -20,7 +20,7 @@ indexing:
 
 evaluation:
   k_values: [1, 5, 10, 100]
-  ragas_llm: claude-3-haiku-20240307
+  ragas_llm: claude-haiku-4-5-20251001
   ragas_sample_size: 50              # SciFact is small; fewer judge calls
   pipelines: [bm25, dense, hybrid, reranked]
 
@@ -31,3 +31,14 @@ serving:
 
 reranker:
   model: cross-encoder/ms-marco-MiniLM-L-6-v2
+
+generation:
+  enabled: true
+  provider: anthropic
+  model: claude-haiku-4-5-20251001   # pinned for every pipeline (cheapest Claude)
+  # provider: openai
+  # model: gpt-5-nano
+  top_k_default: 5                   # passages fed to the LLM
+  max_tokens: 400
+  temperature: 0.0                   # deterministic -> answers differ only by retrieval
+  max_context_chars: 2000            # per-passage cap to bound prompt tokens

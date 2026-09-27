@@ -9,6 +9,7 @@ The cross-encoder adds ~60-120ms; we measure it separately and surface it as
 
 from __future__ import annotations
 
+import threading
 from functools import lru_cache
 from time import perf_counter
 
@@ -36,18 +37,20 @@ class RerankedPipeline(Pipeline):
         self.hybrid = HybridPipeline(config)
         self.reranker = get_cross_encoder(config.reranker.model)
         self.multiplier = config.serving.rerank_multiplier
-        self._reranker_latency_ms: float | None = None
+        # The pipeline instance is shared across concurrent requests (registry
+        # cache + threadpool), so the per-call timing must be thread-local.
+        self._local = threading.local()
 
     def _search(self, query: str, top_k: int) -> list[RetrieveResult]:
         candidates = self.hybrid._search(query, top_k * self.multiplier)
         if not candidates:
-            self._reranker_latency_ms = 0.0
+            self._local.reranker_latency_ms = 0.0
             return []
 
         pairs = [(query, c.text) for c in candidates]
         t0 = perf_counter()
         scores = self.reranker.predict(pairs)
-        self._reranker_latency_ms = (perf_counter() - t0) * 1000.0
+        self._local.reranker_latency_ms = (perf_counter() - t0) * 1000.0
 
         ranked = sorted(
             zip(candidates, scores, strict=True), key=lambda x: x[1], reverse=True
@@ -65,6 +68,6 @@ class RerankedPipeline(Pipeline):
         return results
 
     def _pop_reranker_latency(self) -> float | None:
-        val = self._reranker_latency_ms
-        self._reranker_latency_ms = None
+        val = getattr(self._local, "reranker_latency_ms", None)
+        self._local.reranker_latency_ms = None
         return val

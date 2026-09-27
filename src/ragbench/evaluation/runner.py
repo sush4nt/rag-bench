@@ -149,6 +149,7 @@ def _maybe_run_ragas(cfg, pipeline, corpus, queries, qrels) -> dict[str, float]:
             pipeline,
             samples,
             ragas_llm_model=cfg.evaluation.ragas_llm,
+            generation_cfg=cfg.generation,
             sample_size=cfg.evaluation.ragas_sample_size,
         )
         cols = ["faithfulness", "answer_relevancy", "context_recall", "context_precision"]

@@ -31,6 +31,7 @@ dependencies = [
     # --- Monitoring ---
     "prometheus-client>=0.20",
     "prometheus-fastapi-instrumentator>=7.0",
+    "torch>=2.4",
 ]
 
 [project.optional-dependencies]
@@ -72,6 +73,14 @@ ignore = ["E501", "B008"]  # B008: FastAPI Depends() in defaults is idiomatic
 testpaths = ["tests"]
 addopts = "-q"
 filterwarnings = ["ignore::DeprecationWarning"]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
 
 [dependency-groups]
 dev = [

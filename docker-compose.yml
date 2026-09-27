@@ -12,6 +12,8 @@ services:
       MLFLOW_TRACKING_URI: http://mlflow:5001
       RAGBENCH_DEVICE: cpu
       HF_SPACE: "false"
+      # Needed by POST /api/{dataset}/ask; interpolated from the host .env.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     volumes:
       # BM25 indexes + downloaded datasets persist on the host.
       - ./data:/app/data
